@@ -207,3 +207,36 @@ func (t EpochSeconds) MarshalJSON() ([]byte, error) {
 // written: ISO 8601 with milliseconds and a +0000 offset, the form the
 // Lambda API reference shows.
 const LastModifiedFormat = "2006-01-02T15:04:05.000-0700"
+
+// AddPermissionRequest is the body of AddPermission.
+type AddPermissionRequest struct {
+	Action                *string `json:"Action"`
+	EventSourceToken      *string `json:"EventSourceToken"`
+	FunctionURLAuthType   *string `json:"FunctionUrlAuthType"`
+	InvokedViaFunctionURL *bool   `json:"InvokedViaFunctionUrl"`
+	Principal             *string `json:"Principal"`
+	PrincipalOrgID        *string `json:"PrincipalOrgID"`
+	RevisionID            *string `json:"RevisionId"`
+	SourceAccount         *string `json:"SourceAccount"`
+	SourceArn             *string `json:"SourceArn"`
+	StatementID           *string `json:"StatementId"`
+}
+
+// AddPermissionResponse is AddPermission's answer: the statement added, as
+// a JSON string.
+type AddPermissionResponse struct {
+	Statement string `json:"Statement"`
+}
+
+// PolicyResponse is the answer of GetPolicy, PutResourcePolicy and
+// GetResourcePolicy: the policy, as a JSON string, and its revision.
+type PolicyResponse struct {
+	Policy     string `json:"Policy"`
+	RevisionID string `json:"RevisionId"`
+}
+
+// PutResourcePolicyRequest is the body of PutResourcePolicy.
+type PutResourcePolicyRequest struct {
+	Policy     *string `json:"Policy"`
+	RevisionID *string `json:"RevisionId"`
+}

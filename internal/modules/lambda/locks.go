@@ -9,8 +9,11 @@ import "sync"
 // operation that evaluates a function holds its name's lock for reading
 // from authorization until it has acted, and CreateFunction and
 // DeleteFunction hold it for writing, so a function cannot be replaced in
-// between. Tags changed in between are not held back: a tag value read at
-// authorization may be stale when the operation acts, as on Lambda.
+// between. The operations that change the function's policy hold it for
+// writing too, so the policy an operation is evaluated with is the one in
+// effect until it has acted. Tags changed in between are not held back: a
+// tag value read at authorization may be stale when the operation acts, as
+// on Lambda.
 type nameLocks struct {
 	locks map[string]*nameLock
 	mu    sync.Mutex
