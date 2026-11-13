@@ -145,6 +145,50 @@ func TestTheFurtherActionsAreTheReferences(t *testing.T) {
 	}
 }
 
+// TestThePolicyOperationsFurtherActionsAreTheReferences checks the further
+// actions of the whole-policy operations against the operations the
+// reference authorizes them for, and that each acts on a function.
+func TestThePolicyOperationsFurtherActionsAreTheReferences(t *testing.T) {
+	ref := loadReference(t)
+	for op, actions := range map[string][]string{
+		"PutResourcePolicy":    {actionAddPermission, actionRemovePermission},
+		"GetResourcePolicy":    {actionGetPolicy},
+		"DeleteResourcePolicy": {actionRemovePermission},
+	} {
+		for _, action := range actions {
+			name := strings.TrimPrefix(action, "lambda:")
+			if !slices.ContainsFunc(ref.Operations[op], func(a authorizedAction) bool {
+				return a.Service == "lambda" && a.Name == name
+			}) {
+				t.Errorf("%s: the reference does not authorize %s", op, action)
+			}
+			if !slices.Contains(ref.Actions[name].Resources, "function") {
+				t.Errorf("%s: %s is not on a function", op, action)
+			}
+		}
+	}
+}
+
+// TestThePolicyActionsActOnFunctions checks that every action a function's
+// policy governs is one the reference evaluates on a function, and one an
+// operation here is authorized as.
+func TestThePolicyActionsActOnFunctions(t *testing.T) {
+	ref := loadReference(t)
+	authorized := map[string]bool{actionGetPolicy: true}
+	for _, o := range operations {
+		authorized[o.action] = true
+	}
+	for action := range policyActions {
+		name := strings.TrimPrefix(action, "lambda:")
+		if !slices.Contains(ref.Actions[name].Resources, "function") {
+			t.Errorf("%s: the reference does not evaluate it on a function", action)
+		}
+		if !authorized[action] {
+			t.Errorf("%s: no operation is authorized as it", action)
+		}
+	}
+}
+
 // TestTheConditionKeysAreTheReferences checks that each service key the
 // service supplies is one the reference lists for the actions it is
 // supplied to.
@@ -155,6 +199,7 @@ func TestTheConditionKeysAreTheReferences(t *testing.T) {
 		"TagResource":              {"aws:RequestTag/${TagKey}", keyTagKeys},
 		"UntagResource":            {keyTagKeys},
 		"CreateEventSourceMapping": {"aws:RequestTag/${TagKey}", keyTagKeys, keyFunctionARN},
+		"AddPermission":            {keyPrincipal, keyFunctionURLAuthType},
 		"GetEventSourceMapping":    {keyFunctionARN},
 		"UpdateEventSourceMapping": {keyFunctionARN},
 		"DeleteEventSourceMapping": {keyFunctionARN},

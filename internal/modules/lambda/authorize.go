@@ -132,29 +132,39 @@ func merge(ks ...keys) keys {
 	return out
 }
 
-// functionTags returns the tags of the function name, none when it does not
-// exist: the request is evaluated on the function's ARN either way, and is
-// answered as not found after it is allowed, as Lambda authorizes a request
-// before it looks the function up.
-func (m *Module) functionTags(ctx gas.Context, name string) (keys, error) {
-	tags, err := m.storedFunctionTags(ctx, name)
-	if err != nil {
-		return nil, err
-	}
-	return resourceTags(tags)
+// stored is what a request is evaluated with of the resource it acts on:
+// its tags, its other condition keys, and its resource-based policy, if
+// it has one.
+type stored struct {
+	tags   map[string]string
+	keys   keys
+	policy string
 }
 
-// storedFunctionTags returns the tags of the function name, none when it
-// does not exist.
-func (m *Module) storedFunctionTags(ctx gas.Context, name string) (map[string]string, error) {
+// storedFunction returns the tags and the resource-based policy of the
+// function name, none when it does not exist: the request is evaluated on
+// the function's ARN either way, and is answered as not found after it is
+// allowed, as Lambda authorizes a request before it looks the function up.
+// Both come from one read of the function, under the name's lock its
+// caller holds.
+func (m *Module) storedFunction(ctx gas.Context, name string) (stored, error) {
 	fn, err := m.store.GetFunction(ctx, name)
 	if errors.Is(err, contracts.ErrFunctionNotFound) {
-		return nil, nil
+		return stored{}, nil
 	}
 	if err != nil {
-		return nil, err
+		return stored{}, err
 	}
-	return fn.Tags, nil
+	return stored{tags: fn.Tags, policy: fn.Policy}, nil
+}
+
+// withPolicy is req, on a function, with the function's policy when req's
+// action is one the policy governs.
+func withPolicy(req authz.Request, policy string) authz.Request {
+	if policyActions[req.Action] {
+		req.Policy = policy
+	}
+	return req
 }
 
 // authorizeFunction authorizes op, an operation that takes no qualifier,
@@ -181,12 +191,16 @@ func (m *Module) authorizeOn(
 	extra ...authz.Request,
 ) error {
 	return m.authorize(ctx, func() ([]authz.Request, error) {
-		tags, err := m.functionTags(ctx, name)
+		fn, err := m.storedFunction(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		tags, err := resourceTags(fn.tags)
 		if err != nil {
 			return nil, err
 		}
 		reqs := make([]authz.Request, 0, 1+len(extra))
-		reqs = append(reqs, request(op, resource, tags))
+		reqs = append(reqs, withPolicy(request(op, resource, tags), fn.policy))
 		return append(reqs, extra...), nil
 	})
 }
@@ -212,28 +226,28 @@ func (m *Module) qualifiedARN(ctx gas.Context, name string) string {
 // tags. A mapping that does not exist has neither; the request is answered
 // as not found after it is allowed.
 func (m *Module) mappingKeys(ctx gas.Context, uuid string) (keys, error) {
-	tags, k, err := m.storedMapping(ctx, uuid)
+	mp, err := m.storedMapping(ctx, uuid)
 	if err != nil {
 		return nil, err
 	}
-	own, err := resourceTags(tags)
+	own, err := resourceTags(mp.tags)
 	if err != nil {
 		return nil, err
 	}
-	return merge(own, k), nil
+	return merge(own, mp.keys), nil
 }
 
 // storedMapping returns the tags of the mapping uuid and its
 // lambda:FunctionArn, none when it does not exist.
-func (m *Module) storedMapping(ctx gas.Context, uuid string) (map[string]string, keys, error) {
+func (m *Module) storedMapping(ctx gas.Context, uuid string) (stored, error) {
 	mp, err := m.store.GetMapping(ctx, uuid)
 	if errors.Is(err, contracts.ErrMappingNotFound) {
-		return nil, keys{}, nil
+		return stored{keys: keys{}}, nil
 	}
 	if err != nil {
-		return nil, nil, err
+		return stored{}, err
 	}
-	return mp.Tags, keys{keyFunctionARN: {mp.FunctionARN}}, nil
+	return stored{tags: mp.Tags, keys: keys{keyFunctionARN: {mp.FunctionARN}}}, nil
 }
 
 // mayListTags reports whether GetFunction returns fn's tags: "Lambda
@@ -246,7 +260,9 @@ func (m *Module) mayListTags(ctx gas.Context, fn *contracts.Function) (bool, err
 		if err != nil {
 			return nil, err
 		}
-		return []authz.Request{request("ListTags", m.settings.FunctionARN(fn.Name), tags)}, nil
+		return []authz.Request{
+			withPolicy(request("ListTags", m.settings.FunctionARN(fn.Name), tags), fn.Policy),
+		}, nil
 	})
 	var denied *authz.Denied
 	if errors.As(err, &denied) {

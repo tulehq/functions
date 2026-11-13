@@ -124,6 +124,7 @@ func TestEveryOperationIsDeniedWithoutAPolicy(t *testing.T) {
 	createActiveOrFailed(t, root, "fn")
 	c := userClient(srv)
 	calls := append(functionCalls(t, c), mappingCalls(t, c)...)
+	calls = append(calls, policyCalls(t, c)...)
 	for _, tt := range append(calls, requalifiedCalls(t, c)...) {
 		t.Run(tt.action+" on "+tt.resource, func(t *testing.T) {
 			requireDenied(t, tt.call(), tt.action, tt.resource)
@@ -203,6 +204,42 @@ func functionCalls(t *testing.T, c *lambda.Client) []deniedCall {
 		{func() error {
 			return errOf(c.ListTags(ctx, &lambda.ListTagsInput{Resource: aws.String(fnARN)}))
 		}, "lambda:ListTags", fnARN},
+	}
+}
+
+// policyCalls are the function policy operations on fn. The whole-policy
+// operations are denied their own action, the first they are evaluated
+// for.
+func policyCalls(t *testing.T, c *lambda.Client) []deniedCall {
+	ctx, name := t.Context(), aws.String("fn")
+	return []deniedCall{
+		{func() error {
+			return errOf(c.AddPermission(ctx, &lambda.AddPermissionInput{
+				FunctionName: name, StatementId: aws.String("s"),
+				Action: aws.String("lambda:InvokeFunction"), Principal: aws.String("*"),
+			}))
+		}, "lambda:AddPermission", fnARN},
+		{func() error {
+			return errOf(c.RemovePermission(ctx, &lambda.RemovePermissionInput{
+				FunctionName: name, StatementId: aws.String("s"),
+			}))
+		}, "lambda:RemovePermission", fnARN},
+		{func() error {
+			return errOf(c.GetPolicy(ctx, &lambda.GetPolicyInput{FunctionName: name}))
+		}, "lambda:GetPolicy", fnARN},
+		{func() error {
+			return errOf(c.PutResourcePolicy(ctx, &lambda.PutResourcePolicyInput{
+				ResourceArn: aws.String(fnARN), Policy: aws.String(`{}`),
+			}))
+		}, "lambda:PutResourcePolicy", fnARN},
+		{func() error {
+			return errOf(c.GetResourcePolicy(ctx,
+				&lambda.GetResourcePolicyInput{ResourceArn: aws.String(fnARN)}))
+		}, "lambda:GetResourcePolicy", fnARN},
+		{func() error {
+			return errOf(c.DeleteResourcePolicy(ctx,
+				&lambda.DeleteResourcePolicyInput{ResourceArn: aws.String(fnARN)}))
+		}, "lambda:DeleteResourcePolicy", fnARN},
 	}
 }
 

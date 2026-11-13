@@ -68,6 +68,8 @@ func (m *Module) routes() []route {
 		fn   = fns + "/{FunctionName}"
 		esms = "/2015-03-31/event-source-mappings"
 		tags = "/2017-03-31/tags/{Resource}"
+		// The whole-policy operations' path, at their own API version.
+		policies = "/2026-07-09/resource-policy/{ResourceArn}"
 	)
 	return []route{
 		{m.createFunction, "CreateFunction", http.MethodPost, fns},
@@ -91,6 +93,17 @@ func (m *Module) routes() []route {
 		{m.tagResource, "TagResource", http.MethodPost, tags},
 		{m.untagResource, "UntagResource", http.MethodDelete, tags},
 		{m.listTags, "ListTags", http.MethodGet, tags},
+		{m.addPermission, "AddPermission", http.MethodPost, fn + "/policy"},
+		{m.getPolicy, "GetPolicy", http.MethodGet, fn + "/policy"},
+		{
+			m.removePermission,
+			"RemovePermission",
+			http.MethodDelete,
+			fn + "/policy/{StatementId}",
+		},
+		{m.putResourcePolicy, "PutResourcePolicy", http.MethodPut, policies},
+		{m.getResourcePolicy, "GetResourcePolicy", http.MethodGet, policies},
+		{m.deleteResourcePolicy, "DeleteResourcePolicy", http.MethodDelete, policies},
 		{m.createMapping, "CreateEventSourceMapping", http.MethodPost, esms},
 		{m.listMappings, "ListEventSourceMappings", http.MethodGet, esms},
 		{m.getMapping, "GetEventSourceMapping", http.MethodGet, esms + "/{UUID}"},

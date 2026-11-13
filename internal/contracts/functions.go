@@ -50,6 +50,10 @@ type Image struct {
 // UpdateFunctionCode is in progress, the one being checked, which replaces
 // Image only when it is usable. A function created with an image that cannot
 // be used is Failed and has an Image with no ID.
+//
+// Policy is the function's resource-based policy document, as GetPolicy
+// returns it, empty when it has none, and PolicyRevisionID its revision, a
+// UUID that changes with every change to the policy.
 type Function struct {
 	LastModified               time.Time         `json:"lastModified"`
 	Environment                map[string]string `json:"environment"`
@@ -66,6 +70,8 @@ type Function struct {
 	Role                       string            `json:"role"`
 	LastUpdateStatusReasonCode string            `json:"lastUpdateStatusReasonCode"`
 	RevisionID                 string            `json:"revisionId"`
+	Policy                     string            `json:"policy,omitempty"`
+	PolicyRevisionID           string            `json:"policyRevisionId,omitempty"`
 	Name                       string            `json:"name"`
 	Architectures              []string          `json:"architectures"`
 	ImageConfig                ImageConfig       `json:"imageConfig"`

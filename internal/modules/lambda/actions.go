@@ -16,12 +16,16 @@ package lambda
 //     lambda.amazonaws.com.
 //   - CreateFunction and CreateEventSourceMapping with Tags need
 //     lambda:TagResource on the new resource.
+//   - PutResourcePolicy needs lambda:AddPermission and
+//     lambda:RemovePermission, GetResourcePolicy lambda:GetPolicy, and
+//     DeleteResourcePolicy lambda:RemovePermission, on the function.
 //
 // The condition keys each operation supplies are the ones the reference
 // lists for it that the service has: aws:ResourceTag/<key> from the tags of
 // the function or mapping acted on, aws:RequestTag/<key> and aws:TagKeys
 // from the request's tags, and lambda:FunctionArn for the event source
-// mapping operations.
+// mapping operations, and lambda:Principal and lambda:FunctionUrlAuthType
+// from AddPermission's request.
 
 // resourceType is what an operation is evaluated on.
 type resourceType int
@@ -59,11 +63,36 @@ var operations = map[string]operation{
 	"TagResource":                 {"lambda:TagResource", onTagged},
 	"UntagResource":               {"lambda:UntagResource", onTagged},
 	"ListTags":                    {"lambda:ListTags", onTagged},
+	"AddPermission":               {"lambda:AddPermission", onFunction},
+	"GetPolicy":                   {"lambda:GetPolicy", onFunction},
+	"RemovePermission":            {"lambda:RemovePermission", onFunction},
+	"PutResourcePolicy":           {"lambda:PutResourcePolicy", onFunction},
+	"GetResourcePolicy":           {"lambda:GetResourcePolicy", onFunction},
+	"DeleteResourcePolicy":        {"lambda:DeleteResourcePolicy", onFunction},
 	"CreateEventSourceMapping":    {"lambda:CreateEventSourceMapping", onAll},
 	"ListEventSourceMappings":     {"lambda:ListEventSourceMappings", onAll},
 	"GetEventSourceMapping":       {"lambda:GetEventSourceMapping", onMapping},
 	"UpdateEventSourceMapping":    {"lambda:UpdateEventSourceMapping", onMapping},
 	"DeleteEventSourceMapping":    {"lambda:DeleteEventSourceMapping", onMapping},
+}
+
+// policyActions are the actions a function's resource-based policy
+// governs: those of the operations served here among the Lambda Developer
+// Guide's "Supported API actions" for resource-based policies ("Working with
+// resource-based policies in Lambda"). Every other action, such as
+// lambda:UpdateFunctionConfiguration or lambda:AddPermission, is evaluated
+// without the function's policy, so neither its Allow nor its Deny
+// statements apply to it.
+var policyActions = map[string]bool{
+	"lambda:DeleteFunction":           true,
+	"lambda:GetFunction":              true,
+	"lambda:GetFunctionConfiguration": true,
+	"lambda:GetPolicy":                true,
+	"lambda:InvokeFunction":           true,
+	"lambda:ListTags":                 true,
+	"lambda:TagResource":              true,
+	"lambda:UntagResource":            true,
+	"lambda:UpdateFunctionCode":       true,
 }
 
 // The further actions some operations need.

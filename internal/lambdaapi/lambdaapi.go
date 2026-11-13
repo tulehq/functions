@@ -56,6 +56,7 @@ const (
 	CodeResourceConflict      = "ResourceConflictException"
 	CodeResourceInUse         = "ResourceInUseException"
 	CodePreconditionFailed    = "PreconditionFailedException"
+	CodePolicyLengthExceeded  = "PolicyLengthExceededException"
 	CodeInvalidRequestContent = "InvalidRequestContentException"
 	CodeRequestTooLarge       = "RequestTooLargeException"
 	CodeTooManyRequests       = "TooManyRequestsException"
@@ -95,6 +96,11 @@ func ErrNotFound(msg string) *Error {
 // ErrConflict is ResourceConflictException, 409.
 func ErrConflict(msg string) *Error {
 	return NewError(http.StatusConflict, CodeResourceConflict, msg)
+}
+
+// ErrPreconditionFailed is PreconditionFailedException, 412.
+func ErrPreconditionFailed(msg string) *Error {
+	return NewError(http.StatusPreconditionFailed, CodePreconditionFailed, msg)
 }
 
 // ErrAccessDenied is AccessDeniedException, 403, the common error Lambda

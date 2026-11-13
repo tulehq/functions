@@ -894,6 +894,12 @@
   }
  },
  "Operations": {
+  "AddPermission": [
+   {
+    "Name": "AddPermission",
+    "Service": "lambda"
+   }
+  ],
   "CreateEventSourceMapping": [
    {
     "Name": "CreateEventSourceMapping",
@@ -943,6 +949,16 @@
     "Service": "lambda"
    }
   ],
+  "DeleteResourcePolicy": [
+   {
+    "Name": "DeleteResourcePolicy",
+    "Service": "lambda"
+   },
+   {
+    "Name": "RemovePermission",
+    "Service": "lambda"
+   }
+  ],
   "GetEventSourceMapping": [
    {
     "Name": "GetEventSourceMapping",
@@ -962,6 +978,22 @@
   "GetFunctionConfiguration": [
    {
     "Name": "GetFunctionConfiguration",
+    "Service": "lambda"
+   }
+  ],
+  "GetPolicy": [
+   {
+    "Name": "GetPolicy",
+    "Service": "lambda"
+   }
+  ],
+  "GetResourcePolicy": [
+   {
+    "Name": "GetPolicy",
+    "Service": "lambda"
+   },
+   {
+    "Name": "GetResourcePolicy",
     "Service": "lambda"
    }
   ],
@@ -986,6 +1018,26 @@
   "ListTags": [
    {
     "Name": "ListTags",
+    "Service": "lambda"
+   }
+  ],
+  "PutResourcePolicy": [
+   {
+    "Name": "AddPermission",
+    "Service": "lambda"
+   },
+   {
+    "Name": "PutResourcePolicy",
+    "Service": "lambda"
+   },
+   {
+    "Name": "RemovePermission",
+    "Service": "lambda"
+   }
+  ],
+  "RemovePermission": [
+   {
+    "Name": "RemovePermission",
     "Service": "lambda"
    }
   ],

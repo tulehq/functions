@@ -15,14 +15,15 @@ import (
 
 // tagged is the resource a tagging operation names: a function or an
 // event source mapping, by ARN. update changes its tags in one transaction;
-// stored returns its tags as they are, and its other condition keys.
+// stored returns its tags as they are, its other condition keys, and its
+// resource-based policy.
 //
 // lock holds the resource from authorization until the operation has acted:
 // a function's name lock, since a function can be created again under its
 // name; nothing for a mapping, whose UUID is never reused.
 type tagged struct {
 	update func(gas.Context, func(map[string]string) (map[string]string, error)) error
-	stored func(gas.Context) (map[string]string, keys, error)
+	stored func(gas.Context) (stored, error)
 	lock   func() func()
 	arn    string
 }
@@ -40,22 +41,24 @@ func (t *tagged) authorize(
 	k keys,
 ) error {
 	return m.authorize(ctx, func() ([]authz.Request, error) {
-		tags, extra, err := t.stored(ctx)
+		res, err := t.stored(ctx)
 		if err != nil {
 			return nil, err
 		}
-		own, err := resourceTags(tags)
+		own, err := resourceTags(res.tags)
 		if err != nil {
 			return nil, err
 		}
-		if key, ok := caseCollision(tags, set); ok {
+		if key, ok := caseCollision(res.tags, set); ok {
 			return nil, &lambdaapi.DuplicateTagError{Key: key}
 		}
 		setting, err := requestTags(set)
 		if err != nil {
 			return nil, err
 		}
-		return []authz.Request{request(op, t.arn, merge(own, extra, k, setting))}, nil
+		return []authz.Request{
+			withPolicy(request(op, t.arn, merge(own, res.keys, k, setting)), res.policy),
+		}, nil
 	})
 }
 
@@ -113,7 +116,7 @@ func (m *Module) taggedMapping(uuid string) *tagged {
 		return func() {}
 	}, stored: func(
 		ctx gas.Context,
-	) (map[string]string, keys, error) {
+	) (stored, error) {
 		return m.storedMapping(ctx, uuid)
 	}, update: func(
 		ctx gas.Context, fn func(map[string]string) (map[string]string, error),
@@ -139,9 +142,8 @@ func (m *Module) taggedFunction(name string) *tagged {
 		return m.names.read(name)
 	}, stored: func(
 		ctx gas.Context,
-	) (map[string]string, keys, error) {
-		tags, err := m.storedFunctionTags(ctx, name)
-		return tags, nil, err
+	) (stored, error) {
+		return m.storedFunction(ctx, name)
 	}, update: func(
 		ctx gas.Context, fn func(map[string]string) (map[string]string, error),
 	) error {
