@@ -1056,7 +1056,7 @@ v0.7.0 and sets them.
 - **identity v0.5.0 or later is required.** The service asks identity for
   signing-key version 4, with the organization keys, and binds and shows
   function policies through its principal-ID endpoint, which identity
-  v0.4.0 does not serve: there, a policy write naming a user or role, and a
+  v0.4.1 and earlier do not serve: there, a policy write naming a user or role, and a
   read of a policy holding a unique ID, fail with `500` `ServiceException`.
 - **Policies stored by earlier releases are unbound.** They name their
   principals by ARN and are matched by ARN, so a user or role deleted and
