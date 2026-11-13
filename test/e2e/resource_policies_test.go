@@ -342,14 +342,19 @@ func TestAFunctionPolicyConditionOnAPrincipalTag(t *testing.T) {
 }
 
 // TestStandaloneServesTheFunctionPolicy checks the policy operations with
-// the static key, which is root and never evaluated.
+// the static key, which is root and never evaluated. With no identity to
+// bind them, policies are stored as sent: a user ARN is kept, whether or
+// not such a user exists.
 func TestStandaloneServesTheFunctionPolicy(t *testing.T) {
 	c, _ := newClient(t)
 	createFunction(t, c, "solo", "echo", nil)
 	grant(t, c, "solo", "everyone", "lambda:InvokeFunction", "*")
+	grant(t, c, "solo", "user", "lambda:GetFunction", userARN("anyone"))
 	out, err := c.GetPolicy(t.Context(), &lambda.GetPolicyInput{FunctionName: aws.String("solo")})
 	requireNoErr(t, err, "get the policy")
 	requireContains(t, aws.ToString(out.Policy), `"Sid":"everyone"`, "the policy")
+	requireContains(t, aws.ToString(out.Policy), `{"AWS":"`+userARN("anyone")+`"}`,
+		"the policy")
 	putFunctionPolicy(t, c, "solo", `{"Effect":"Deny","Principal":"*","Action":"*",`+
 		`"Resource":"`+functionARN("solo")+`"}`)
 	invokeOK(t, c, "solo", map[string]string{"who": "solo"}, nil)

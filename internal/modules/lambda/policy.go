@@ -7,9 +7,18 @@ package lambda
 // answer are the Lambda API Reference's. The policy is evaluated with the
 // identity policies of the caller on every action on the function, its
 // Allow statements only on the actions it can grant (policyActions).
+//
+// With an identity endpoint, a policy is stored bound, as AWS saves it:
+// each IAM user or role ARN in its Principal and NotPrincipal elements is
+// replaced by that user's or role's unique ID, so a user or role deleted
+// and created again under the same name is not the principal the policy
+// names. It is evaluated bound, and returned shown: each unique ID that a
+// user or role still has as its current ARN, and one that none has as the
+// ID.
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +30,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gasmod/gas"
+	"tule.dev/identity/principals"
 	"tule.dev/policy"
 
 	"tule.dev/functions/internal/authz"
@@ -87,10 +97,89 @@ const (
 var (
 	errLatest = lambdaapi.ErrInvalidParameter(
 		"We currently do not support adding policies for $LATEST.")
+	// errInvalidPrincipal is the message Lambda is reported to give an
+	// AddPermission whose principal is invalid or no longer exists (AWS
+	// re:Post, "lambda functional url permission"), though the reference
+	// documents none. PutResourcePolicy refuses a user or role that does not
+	// exist with it too, so both writes answer alike.
 	errInvalidPrincipal = lambdaapi.ErrInvalidParameter(
 		"The provided principal was invalid. Please check the principal and try again.")
 	errNoPolicy = lambdaapi.ErrNotFound("The resource you requested does not exist.")
 )
+
+// Principals binds a function policy's principals to unique IDs when it is
+// saved and shows a bound policy as AWS shows it, as identity's
+// tule.dev/identity/principals Client does. Bind's error for a user or role
+// ARN that no user or role has matches principals.ErrInvalidPrincipal.
+type Principals interface {
+	Bind(ctx context.Context, doc string) (string, error)
+	Show(ctx context.Context, doc string) (string, error)
+}
+
+// bind is doc bound, as it is stored, or doc itself when the service runs
+// standalone. A policy naming a user or role that does not exist is refused
+// with invalid, the operation's error; a failure to reach identity fails the
+// write.
+func (m *Module) bind(ctx context.Context, doc string, invalid error) (string, error) {
+	if m.principals == nil {
+		return doc, nil
+	}
+	out, err := m.principals.Bind(ctx, doc)
+	if errors.Is(err, principals.ErrInvalidPrincipal) {
+		return "", invalid
+	}
+	if err != nil {
+		return "", fmt.Errorf("lambda: bind the function policy's principals: %w", err)
+	}
+	return out, nil
+}
+
+// show is the stored doc as it is returned, or doc itself when the service
+// runs standalone. A failure to reach identity fails the read.
+func (m *Module) show(ctx context.Context, doc string) (string, error) {
+	if m.principals == nil {
+		return doc, nil
+	}
+	out, err := m.principals.Show(ctx, doc)
+	if err != nil {
+		return "", fmt.Errorf("lambda: show the function policy's principals: %w", err)
+	}
+	return out, nil
+}
+
+// bindStatement is the statement s bound, as AddPermission adds it. Only
+// the new statement is bound: the policy's other statements are kept as
+// they are stored, so one a release before binding stored keeps matching by
+// ARN, and one naming a principal deleted since does not fail the call.
+func (m *Module) bindStatement(
+	ctx context.Context,
+	s *permissionStatement,
+) (json.RawMessage, error) {
+	b, err := marshal(s)
+	if err != nil {
+		return nil, err
+	}
+	if m.principals == nil {
+		return json.RawMessage(b), nil
+	}
+	doc, err := marshal(policyDoc{
+		Version: "2012-10-17", Statement: []json.RawMessage{json.RawMessage(b)},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if doc, err = m.bind(ctx, doc, errInvalidPrincipal); err != nil {
+		return nil, err
+	}
+	p, err := decodePolicy(doc)
+	if err != nil {
+		return nil, err
+	}
+	if len(p.Statement) != 1 {
+		return nil, fmt.Errorf("lambda: binding a statement gave %d statements", len(p.Statement))
+	}
+	return p.Statement[0], nil
+}
 
 // revisionMismatch is PreconditionFailedException, as the API Reference
 // describes it, pointing to op for the latest RevisionId.
@@ -352,11 +441,12 @@ func statementOf(req *lambdaapi.AddPermissionRequest, arn string) (*permissionSt
 	return s, nil
 }
 
-// withStatement is the policy doc, empty for none, with s added: a new
-// policy is {"Version":"2012-10-17","Id":"default","Statement":[s]} (the
-// AWS CLI Command Reference, get-policy). A statement ID already in the
-// policy is refused.
-func withStatement(doc string, s *permissionStatement) (string, error) {
+// withStatement is the policy doc, empty for none, with the statement s,
+// whose Sid is sid, added: a new policy is
+// {"Version":"2012-10-17","Id":"default","Statement":[s]} (the AWS CLI
+// Command Reference, get-policy). A statement ID already in the policy is
+// refused.
+func withStatement(doc, sid string, s json.RawMessage) (string, error) {
 	p := policyDoc{Version: "2012-10-17", ID: "default"}
 	if doc != "" {
 		var err error
@@ -365,16 +455,12 @@ func withStatement(doc string, s *permissionStatement) (string, error) {
 		}
 	}
 	for _, st := range p.Statement {
-		if sid, ok := statementID(st); ok && sid == s.Sid {
-			return "", lambdaapi.ErrConflict("The statement id (" + s.Sid + ") provided already " +
+		if id, ok := statementID(st); ok && id == sid {
+			return "", lambdaapi.ErrConflict("The statement id (" + sid + ") provided already " +
 				"exists. Please provide a new statement id, or remove the existing statement.")
 		}
 	}
-	b, err := marshal(s)
-	if err != nil {
-		return "", err
-	}
-	p.Statement = append(p.Statement, json.RawMessage(b))
+	p.Statement = append(p.Statement, s)
 	return marshal(p)
 }
 
@@ -511,9 +597,13 @@ func (m *Module) addPermission(ctx gas.Context) error {
 	if err != nil {
 		return err
 	}
+	bound, err := m.bindStatement(ctx, s)
+	if err != nil {
+		return err
+	}
 	if _, err = m.setPolicy(ctx, name, req.RevisionID, "GetPolicy",
 		func(doc string) (string, error) {
-			out, wErr := withStatement(doc, s)
+			out, wErr := withStatement(doc, s.Sid, bound)
 			if wErr != nil {
 				return "", wErr
 			}
@@ -521,6 +611,8 @@ func (m *Module) addPermission(ctx gas.Context) error {
 		}); err != nil {
 		return err
 	}
+	// The statement as sent is the bound one shown: its principal, if a user
+	// or role, has the ARN it was bound by.
 	b, err := marshal(s)
 	if err != nil {
 		return err
@@ -592,27 +684,48 @@ func (m *Module) getPolicy(ctx gas.Context) error {
 	if err != nil {
 		return err
 	}
-	defer m.names.read(name)()
-	if err = m.authorizeActions(
-		ctx, "GetPolicy", name, m.qualifiedARN(ctx, name), nil,
-	); err != nil {
-		return err
-	}
-	return m.writePolicy(ctx, name, latest)
-}
-
-// writePolicy answers with the function name's policy and its revision,
-// not found when it has none or the request names $LATEST.
-func (m *Module) writePolicy(ctx gas.Context, name string, latest bool) error {
-	fn, err := m.getOrNotFound(ctx, name)
+	fn, err := m.readPolicy(ctx, name, latest, func() error {
+		return m.authorizeActions(ctx, "GetPolicy", name, m.qualifiedARN(ctx, name), nil)
+	})
 	if err != nil {
 		return err
 	}
+	return m.writePolicy(ctx, fn)
+}
+
+// readPolicy authorizes the read with authorize and reads the function
+// name, under the name's lock, not found when it has no policy or the
+// request names $LATEST. The lock is released on return, before the policy
+// is shown, so an identity slow to answer holds up only this read, not the
+// operations on the function that wait for the lock.
+func (m *Module) readPolicy(
+	ctx gas.Context,
+	name string,
+	latest bool,
+	authorize func() error,
+) (*contracts.Function, error) {
+	defer m.names.read(name)()
+	if err := authorize(); err != nil {
+		return nil, err
+	}
+	fn, err := m.getOrNotFound(ctx, name)
+	if err != nil {
+		return nil, err
+	}
 	if latest || fn.Policy == "" {
-		return errNoPolicy
+		return nil, errNoPolicy
+	}
+	return fn, nil
+}
+
+// writePolicy answers with fn's policy, shown, and its revision.
+func (m *Module) writePolicy(ctx gas.Context, fn *contracts.Function) error {
+	shown, err := m.show(ctx, fn.Policy)
+	if err != nil {
+		return err
 	}
 	return lambdaapi.Write(ctx, http.StatusOK,
-		lambdaapi.PolicyResponse{Policy: fn.Policy, RevisionID: fn.PolicyRevisionID})
+		lambdaapi.PolicyResponse{Policy: shown, RevisionID: fn.PolicyRevisionID})
 }
 
 // resourceARN resolves the ResourceArn path label of the whole-policy
@@ -678,28 +791,57 @@ func (m *Module) putResourcePolicy(ctx gas.Context) error {
 	if err != nil {
 		return err
 	}
-	defer m.names.write(name)()
-	req, err := decodePutPolicy(ctx)
+	fn, err := m.storePolicy(ctx, name, latest, arn)
 	if err != nil {
 		return err
 	}
-	if err = m.authorizeActions(ctx, "PutResourcePolicy", name, arn, nil,
-		actionAddPermission, actionRemovePermission); err != nil {
-		return err
-	}
-	if latest {
-		return errLatest
-	}
-	if err = checkPolicy(*req.Policy); err != nil {
-		return err
-	}
-	fn, err := m.setPolicy(ctx, name, req.RevisionID, "GetResourcePolicy",
-		func(string) (string, error) { return *req.Policy, nil })
+	// The policy is shown once the name's lock is released, so an identity
+	// slow to answer holds up only this call. A failure to show it fails the
+	// call although the policy is stored.
+	shown, err := m.show(ctx, fn.Policy)
 	if err != nil {
 		return err
 	}
 	return lambdaapi.Write(ctx, http.StatusOK,
-		lambdaapi.PolicyResponse{Policy: fn.Policy, RevisionID: fn.PolicyRevisionID})
+		lambdaapi.PolicyResponse{Policy: shown, RevisionID: fn.PolicyRevisionID})
+}
+
+// storePolicy decodes, authorizes, binds and stores a PutResourcePolicy's
+// policy on the function name at arn, under the name's lock, and returns
+// the function as stored. The policy is bound between authorization and
+// the write, so a failure to reach identity stores nothing, and the bound
+// policy is held to the size limit too, as it is stored; an identity slow
+// to answer holds the lock, and the operations on the function wait.
+func (m *Module) storePolicy(
+	ctx gas.Context,
+	name string,
+	latest bool,
+	arn string,
+) (*contracts.Function, error) {
+	defer m.names.write(name)()
+	req, err := decodePutPolicy(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err = m.authorizeActions(ctx, "PutResourcePolicy", name, arn, nil,
+		actionAddPermission, actionRemovePermission); err != nil {
+		return nil, err
+	}
+	if latest {
+		return nil, errLatest
+	}
+	if err = checkPolicy(*req.Policy); err != nil {
+		return nil, err
+	}
+	bound, err := m.bind(ctx, *req.Policy, errInvalidPrincipal)
+	if err != nil {
+		return nil, err
+	}
+	if err = checkPolicy(bound); err != nil {
+		return nil, err
+	}
+	return m.setPolicy(ctx, name, req.RevisionID, "GetResourcePolicy",
+		func(string) (string, error) { return bound, nil })
 }
 
 func (m *Module) getResourcePolicy(ctx gas.Context) error {
@@ -707,12 +849,13 @@ func (m *Module) getResourcePolicy(ctx gas.Context) error {
 	if err != nil {
 		return err
 	}
-	defer m.names.read(name)()
-	if err = m.authorizeActions(ctx, "GetResourcePolicy", name, arn, nil,
-		actionGetPolicy); err != nil {
+	fn, err := m.readPolicy(ctx, name, latest, func() error {
+		return m.authorizeActions(ctx, "GetResourcePolicy", name, arn, nil, actionGetPolicy)
+	})
+	if err != nil {
 		return err
 	}
-	return m.writePolicy(ctx, name, latest)
+	return m.writePolicy(ctx, fn)
 }
 
 func (m *Module) deleteResourcePolicy(ctx gas.Context) error {
