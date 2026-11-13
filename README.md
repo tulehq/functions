@@ -415,7 +415,12 @@ which the Lambda API keeps and this service evaluates:
   the policy `AddPermission` built; **DeleteResourcePolicy** deletes it.
   Their `ResourceArn` is a complete function ARN, held to the model's
   pattern and 256 characters (`ValidationException`); one of another
-  account or region is `404`.
+  account or region is `404`. The document's `Resource` elements are not
+  checked against the function: the Lambda documentation says a statement's
+  `Resource` is "the Lambda function, version, or alias you want the
+  statement to apply to" and documents no refusal of another one, so a
+  statement naming another function is stored, and has no effect, since
+  every request evaluated with the policy is on this function.
 - **GetPolicy** and **GetResourcePolicy** return the document and its
   `RevisionId`, `404` `ResourceNotFoundException` when the function has
   none.
@@ -472,6 +477,27 @@ Guide's evaluation logic does:
 - **A role session whose role was deleted** is denied everything:
   nothing that names the role matches it, and `aws:PrincipalArn` is never
   derived from its session ARN.
+
+**Write `Resource` to cover `:$LATEST`.** A request that names the
+`$LATEST` qualifier (`GetFunction`, `GetFunctionConfiguration`,
+`DeleteFunction`, `Invoke`, `AddPermission`, `RemovePermission`,
+`GetPolicy`) is evaluated on `arn:...:function:fn:$LATEST`, since Lambda
+compares the policy's resource with the qualifier as well. A statement on
+the unqualified ARN alone, `arn:...:function:fn`, does not match it, so a
+`Deny` written that way does not stop `fn:$LATEST`; write it on both ARNs,
+or on `arn:...:function:fn*`, which matches both (and every function whose
+name starts with `fn`).
+
+**Event source mappings are not subject to the function policy.** A
+mapping invokes its function as the service, as Lambda's poller does, not
+as a principal, so neither the function policy nor any identity policy is
+evaluated on its invocations; what is evaluated is the
+`CreateEventSourceMapping` or `UpdateEventSourceMapping` that points the
+mapping at the function. This matches AWS as far as it documents it:
+Lambda's SQS setup ("Creating and configuring an Amazon SQS event source
+mapping") asks only for permissions in the function's execution role and
+adds no statement to the function policy, so a mapping's invocations do not
+go through it.
 
 A stored policy that does not parse fails the request, `500`
 `ServiceException`, rather than be evaluated without it.
@@ -587,6 +613,10 @@ too, as explicit settings, and the service then logs a warning at startup:
 **any principal allowed `lambda:CreateFunction` or
 `lambda:UpdateFunctionCode`, and `lambda:InvokeFunction`, can run code that
 reads that key, and so obtain its access** whatever its own policies say.
+A function policy extends that to other accounts: a grant of
+`lambda:UpdateFunctionCode` and `lambda:InvokeFunction` to another account,
+or to `"*"`, lets that account's principals with the matching identity
+`Allow` replace the function's code, invoke it, and read the key.
 
 Since the credential variables are reserved, as on Lambda, a function's own
 `Environment` cannot replace them. To give the functions one narrower key,
