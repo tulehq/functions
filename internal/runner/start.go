@@ -67,30 +67,45 @@ func (r *Runner) startContainer(ctx context.Context, c *container) error {
 	r.mu.Unlock()
 	// From here the container exists, so every failure removes it. The
 	// attach and the wait outlive ctx: they end with the container.
-	stream, err := r.cfg.Docker.Attach(context.WithoutCancel(ctx), id)
-	if err != nil {
-		r.remove(c)
-		close(c.logsDone)
-		return fmt.Errorf("runner: attach to container %s: %w", id, err)
+	if err = r.attach(ctx, c); err != nil {
+		return err
 	}
-	go func() {
-		defer close(c.logsDone)
-		defer func() { _ = stream.Close() }()
-		if dErr := docker.Demux(stream, &c.logs); dErr != nil {
-			r.cfg.Logger.Debug("container output ended").Str("container", id).
-				Err("error", dErr).Send()
-		}
-	}()
 
 	c.started = time.Now()
 	if err = r.cfg.Docker.StartContainer(ctx, id); err != nil {
-		r.remove(c)
+		if r.removeStarting(c) {
+			return errDeletedMeanwhile
+		}
 		return fmt.Errorf("runner: start container %s: %w", id, err)
 	}
 	// Waiting for a container that is not running returns at once, so the
 	// wait starts once the container has.
 	r.wg.Add(1)
 	go r.watch(context.WithoutCancel(ctx), c)
+	return nil
+}
+
+// attach attaches to c's created container and copies its output into
+// c's logs until the container ends. When the attach fails, c's removal
+// begins.
+func (r *Runner) attach(ctx context.Context, c *container) error {
+	stream, err := r.cfg.Docker.Attach(context.WithoutCancel(ctx), c.id)
+	if err != nil {
+		deleted := r.removeStarting(c)
+		close(c.logsDone)
+		if deleted {
+			return errDeletedMeanwhile
+		}
+		return fmt.Errorf("runner: attach to container %s: %w", c.id, err)
+	}
+	go func() {
+		defer close(c.logsDone)
+		defer func() { _ = stream.Close() }()
+		if dErr := docker.Demux(stream, &c.logs); dErr != nil {
+			r.cfg.Logger.Debug("container output ended").Str("container", c.id).
+				Err("error", dErr).Send()
+		}
+	}()
 	return nil
 }
 
@@ -149,6 +164,18 @@ func (r *Runner) remove(c *container) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.removeLocked(c)
+}
+
+// removeStarting begins the removal of c, which failed to start, and
+// reports whether its removal had already begun: a delete that raced the
+// start, which Docker then refuses to start a container marked for removal
+// for.
+func (r *Runner) removeStarting(c *container) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	deleted := c.removing
+	r.removeLocked(c)
+	return deleted
 }
 
 // removeLocked begins c's removal, once; r.mu is held. A container Docker
