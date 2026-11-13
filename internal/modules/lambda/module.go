@@ -13,6 +13,7 @@ import (
 
 	"github.com/gasmod/gas"
 
+	"tule.dev/functions/internal/authz"
 	"tule.dev/functions/internal/contracts"
 	"tule.dev/functions/internal/engine"
 	"tule.dev/functions/internal/lambdaapi"
@@ -25,15 +26,22 @@ type Module struct {
 	router   *gas.Router
 	store    contracts.Store
 	engine   *engine.Engine
+	authz    *authz.Authorizer
 	settings *contracts.Settings
+	names    *nameLocks
 }
 
 // NewModule returns the constructor gas builds the Module with.
 func NewModule(settings *contracts.Settings) func(
-	router *gas.Router, store contracts.Store, eng *engine.Engine,
+	router *gas.Router, store contracts.Store, eng *engine.Engine, az *authz.Authorizer,
 ) *Module {
-	return func(router *gas.Router, store contracts.Store, eng *engine.Engine) *Module {
-		return &Module{router: router, store: store, engine: eng, settings: settings}
+	return func(
+		router *gas.Router, store contracts.Store, eng *engine.Engine, az *authz.Authorizer,
+	) *Module {
+		return &Module{
+			router: router, store: store, engine: eng, authz: az, settings: settings,
+			names: newNameLocks(),
+		}
 	}
 }
 
@@ -44,37 +52,56 @@ func (m *Module) Name() string {
 
 type handler func(gas.Context) error
 
-// Init registers the routes, at the paths and methods of the SDK model.
-func (m *Module) Init(context.Context) error {
+// route is a routed operation: its SDK name, which operations maps to its
+// IAM action, its handler, and its method and path.
+type route struct {
+	h      handler
+	op     string
+	method string
+	path   string
+}
+
+// routes are the operations, at the paths and methods of the SDK model.
+func (m *Module) routes() []route {
 	const (
 		fns  = "/2015-03-31/functions"
 		fn   = fns + "/{FunctionName}"
 		esms = "/2015-03-31/event-source-mappings"
 		tags = "/2017-03-31/tags/{Resource}"
 	)
-	routes := []struct {
-		h      handler
-		method string
-		path   string
-	}{
-		{m.createFunction, http.MethodPost, fns},
-		{m.listFunctions, http.MethodGet, fns},
-		{m.getFunction, http.MethodGet, fn},
-		{m.deleteFunction, http.MethodDelete, fn},
-		{m.getFunctionConfiguration, http.MethodGet, fn + "/configuration"},
-		{m.updateFunctionConfiguration, http.MethodPut, fn + "/configuration"},
-		{m.updateFunctionCode, http.MethodPut, fn + "/code"},
-		{m.invoke, http.MethodPost, fn + "/invocations"},
-		{m.tagResource, http.MethodPost, tags},
-		{m.untagResource, http.MethodDelete, tags},
-		{m.listTags, http.MethodGet, tags},
-		{m.createMapping, http.MethodPost, esms},
-		{m.listMappings, http.MethodGet, esms},
-		{m.getMapping, http.MethodGet, esms + "/{UUID}"},
-		{m.updateMapping, http.MethodPut, esms + "/{UUID}"},
-		{m.deleteMapping, http.MethodDelete, esms + "/{UUID}"},
+	return []route{
+		{m.createFunction, "CreateFunction", http.MethodPost, fns},
+		{m.listFunctions, "ListFunctions", http.MethodGet, fns},
+		{m.getFunction, "GetFunction", http.MethodGet, fn},
+		{m.deleteFunction, "DeleteFunction", http.MethodDelete, fn},
+		{
+			m.getFunctionConfiguration,
+			"GetFunctionConfiguration",
+			http.MethodGet,
+			fn + "/configuration",
+		},
+		{
+			m.updateFunctionConfiguration,
+			"UpdateFunctionConfiguration",
+			http.MethodPut,
+			fn + "/configuration",
+		},
+		{m.updateFunctionCode, "UpdateFunctionCode", http.MethodPut, fn + "/code"},
+		{m.invoke, "Invoke", http.MethodPost, fn + "/invocations"},
+		{m.tagResource, "TagResource", http.MethodPost, tags},
+		{m.untagResource, "UntagResource", http.MethodDelete, tags},
+		{m.listTags, "ListTags", http.MethodGet, tags},
+		{m.createMapping, "CreateEventSourceMapping", http.MethodPost, esms},
+		{m.listMappings, "ListEventSourceMappings", http.MethodGet, esms},
+		{m.getMapping, "GetEventSourceMapping", http.MethodGet, esms + "/{UUID}"},
+		{m.updateMapping, "UpdateEventSourceMapping", http.MethodPut, esms + "/{UUID}"},
+		{m.deleteMapping, "DeleteEventSourceMapping", http.MethodDelete, esms + "/{UUID}"},
 	}
-	for _, r := range routes {
+}
+
+// Init registers the routes.
+func (m *Module) Init(context.Context) error {
+	for _, r := range m.routes() {
 		m.router.Handle(m, r.method, r.path, serve(r.h))
 	}
 	return nil
@@ -100,7 +127,7 @@ var functionNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 // resolveName returns the function name a FunctionName names: a name, a
 // partial ARN (account:function:name) or a full ARN, each optionally
 // qualified. Only $LATEST exists, so any other qualifier names no function;
-// so does an ARN of another account or region.
+// so does an ARN of another partition, account or region.
 func (m *Module) resolveName(value string) (string, error) {
 	invalid := lambdaapi.ErrValidation(fmt.Sprintf("1 validation error detected: Value '%s' "+
 		"at 'functionName' failed to satisfy constraint: Member must satisfy regular "+
@@ -110,25 +137,34 @@ func (m *Module) resolveName(value string) (string, error) {
 	if !ok {
 		return "", invalid
 	}
-	account, region, name, qualifier := ref.account, ref.region, ref.name, ref.qualifier
-	if !functionNamePattern.MatchString(name) {
+	if !functionNamePattern.MatchString(ref.name) {
 		return "", invalid
 	}
-	if (account != "" && account != m.settings.AccountID) ||
-		(region != "" && region != m.settings.Region) {
+	if !m.isOurs(ref) {
 		return "", lambdaapi.ErrNotFound("Function not found: " + value)
 	}
-	if qualifier != "" && qualifier != contracts.LatestVersion {
+	if ref.qualifier != "" && ref.qualifier != contracts.LatestVersion {
 		return "", lambdaapi.ErrNotFound("Function not found: " +
-			m.settings.FunctionARN(name) + ":" + qualifier)
+			m.settings.FunctionARN(ref.name) + ":" + ref.qualifier)
 	}
-	return name, nil
+	return ref.name, nil
 }
 
-// functionRef is what a FunctionName says: the name, and the account,
-// region and qualifier when it gives them.
+// isOurs reports whether ref is of this service's partition, account and
+// region, where it gives them.
+func (m *Module) isOurs(ref functionRef) bool {
+	return (ref.partition == "" || ref.partition == partition) &&
+		(ref.account == "" || ref.account == m.settings.AccountID) &&
+		(ref.region == "" || ref.region == m.settings.Region)
+}
+
+// partition is the only partition this service's ARNs are in.
+const partition = "aws"
+
+// functionRef is what a FunctionName says: the name, and the partition,
+// account, region and qualifier when it gives them.
 type functionRef struct {
-	account, region, name, qualifier string
+	partition, account, region, name, qualifier string
 }
 
 // parseFunctionRef splits a name (name[:qualifier]), a partial ARN
@@ -145,7 +181,8 @@ func parseFunctionRef(value string) (functionRef, bool) {
 		ref.account, ref.name, rest = parts[0], parts[2], parts[3:]
 	case len(parts) >= 7 && len(parts) <= 8 && parts[0] == "arn" && parts[2] == "lambda" &&
 		parts[5] == "function":
-		ref.region, ref.account, ref.name, rest = parts[3], parts[4], parts[6], parts[7:]
+		ref.partition, ref.region, ref.account = parts[1], parts[3], parts[4]
+		ref.name, rest = parts[6], parts[7:]
 	default:
 		return ref, false
 	}
@@ -153,14 +190,22 @@ func parseFunctionRef(value string) (functionRef, bool) {
 	return ref, true
 }
 
-// pathFunction resolves the FunctionName path label and the Qualifier
-// query parameter.
+// pathFunction resolves the FunctionName path label of an operation that
+// takes no Qualifier parameter, such as UpdateFunctionCode; one in the query
+// is not the operation's, and is ignored as unknown parameters are.
 func (m *Module) pathFunction(ctx gas.Context) (string, error) {
 	v, err := lambdaapi.PathParam(ctx, "FunctionName")
 	if err != nil {
 		return "", err
 	}
-	name, err := m.resolveName(v)
+	return m.resolveName(v)
+}
+
+// pathQualifiedFunction resolves the FunctionName path label and the
+// Qualifier query parameter of an operation that takes one: GetFunction,
+// GetFunctionConfiguration, DeleteFunction and Invoke.
+func (m *Module) pathQualifiedFunction(ctx gas.Context) (string, error) {
+	name, err := m.pathFunction(ctx)
 	if err != nil {
 		return "", err
 	}

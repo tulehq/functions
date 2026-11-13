@@ -17,6 +17,7 @@ import (
 
 	"github.com/gasmod/gas"
 
+	"tule.dev/functions/internal/authz"
 	"tule.dev/functions/internal/contracts"
 	"tule.dev/functions/internal/httpx"
 	"tule.dev/functions/internal/lambdaapi"
@@ -33,15 +34,41 @@ const (
 	maxLimit     = 100
 )
 
+// InspectAction is the IAM action the retrieval API needs of a principal
+// other than root: it is Tule's own, not AWS's, and is evaluated on the
+// service's ARN prefix for the account and region,
+// arn:aws:lambda:<region>:<account>:*.
+const InspectAction = "tule:Inspect"
+
 // Module registers the retrieval routes and serves them.
 type Module struct {
-	router *gas.Router
-	store  contracts.Store
+	router   *gas.Router
+	store    contracts.Store
+	authz    *authz.Authorizer
+	settings *contracts.Settings
 }
 
-// NewModule returns a Module serving from store.
-func NewModule(router *gas.Router, store contracts.Store) *Module {
-	return &Module{router: router, store: store}
+// NewModule returns the constructor gas builds the Module with.
+func NewModule(settings *contracts.Settings) func(
+	router *gas.Router, store contracts.Store, az *authz.Authorizer,
+) *Module {
+	return func(router *gas.Router, store contracts.Store, az *authz.Authorizer) *Module {
+		return &Module{router: router, store: store, authz: az, settings: settings}
+	}
+}
+
+// authorize authorizes tule:Inspect, answering a denial with
+// AccessDeniedException in AWS's message form.
+func (m *Module) authorize(ctx gas.Context) error {
+	resource := "arn:aws:lambda:" + m.settings.Region + ":" + m.settings.AccountID + ":*"
+	err := m.authz.Authorize(ctx.Request(), func() ([]authz.Request, error) {
+		return []authz.Request{{Action: InspectAction, Resource: resource}}, nil
+	})
+	var denied *authz.Denied
+	if errors.As(err, &denied) {
+		return lambdaapi.ErrAccessDenied(denied.Error())
+	}
+	return err
 }
 
 // Name identifies the module to gas.
@@ -63,7 +90,11 @@ func (m *Module) Init(context.Context) error {
 	for _, r := range routes {
 		h := r.h
 		m.router.Handle(m, r.method, r.path, func(ctx gas.Context) error {
-			if err := h(ctx); err != nil {
+			err := m.authorize(ctx)
+			if err == nil {
+				err = h(ctx)
+			}
+			if err != nil {
 				WriteError(ctx.ResponseWriter(), ctx.Request(), err)
 			}
 			return nil

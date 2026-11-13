@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/gasmod/gas"
+	"tule.dev/identity/servicerole"
 
 	"tule.dev/functions/internal/contracts"
 	"tule.dev/functions/internal/docker"
@@ -40,7 +41,11 @@ type Engine struct {
 	// poller's start and stop.
 	mappingLocks map[string]*sync.Mutex
 	pollers      map[string]context.CancelFunc
-	// accessKeyID and secretAccessKey are the key the pollers sign with.
+	// roles assumes the functions' execution roles through identity; nil
+	// unless FunctionCredentials is role.
+	roles *servicerole.Client
+	// accessKeyID and secretAccessKey are the key the pollers sign with,
+	// but in role mode, where they sign with their functions' roles.
 	accessKeyID     string
 	secretAccessKey string
 	wg              sync.WaitGroup
@@ -50,8 +55,13 @@ type Engine struct {
 var _ gas.Service = (*Engine)(nil)
 
 // New returns the constructor gas builds the Engine with. The pollers sign
-// their SQS calls with the given key.
-func New(settings *contracts.Settings, accessKeyID, secretAccessKey string) func(
+// their SQS calls with the given key, or, with roles, which assumes the
+// functions' execution roles in role mode, with their functions' roles.
+func New(
+	settings *contracts.Settings,
+	accessKeyID, secretAccessKey string,
+	roles *servicerole.Client,
+) func(
 	store contracts.Store, logger gas.Logger, bus *gas.EventBus,
 ) *Engine {
 	return func(store contracts.Store, logger gas.Logger, bus *gas.EventBus) *Engine {
@@ -65,6 +75,7 @@ func New(settings *contracts.Settings, accessKeyID, secretAccessKey string) func
 			mappingLocks:    map[string]*sync.Mutex{},
 			accessKeyID:     accessKeyID,
 			secretAccessKey: secretAccessKey,
+			roles:           roles,
 		}
 	}
 }
@@ -158,6 +169,8 @@ func (e *Engine) Start(ctx context.Context) error {
 		IdleTimeout:        e.settings.IdleTimeout,
 	}
 	switch e.settings.FunctionCredentials {
+	case contracts.CredentialsRole:
+		cfg.Credentials = e.containerCredentials
 	case contracts.CredentialsRoot:
 		cfg.AccessKeyID, cfg.SecretAccessKey = e.accessKeyID, e.secretAccessKey
 	case contracts.CredentialsCustom:

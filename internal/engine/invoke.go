@@ -40,6 +40,7 @@ func specOf(fn *contracts.Function) *runner.Spec {
 		Env:        fn.Environment,
 		Function:   fn.Name,
 		ARN:        fn.ARN,
+		Role:       fn.Role,
 		Revision:   fn.RevisionID,
 		Image:      fn.Image.ID,
 		WorkingDir: fn.ImageConfig.WorkingDirectory,

@@ -39,6 +39,7 @@ var imageSources = map[string]string{
 	"panic":          "panic",
 	"sleep":          "sleep",
 	"sqs":            "sqs",
+	"s3put":          "s3put",
 	"cleanup-delete": "echo",
 	"cleanup-stop":   "echo",
 	"cleanup-update": "echo",

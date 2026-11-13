@@ -10,6 +10,7 @@ import (
 
 	"github.com/gasmod/gas"
 
+	"tule.dev/functions/internal/contracts"
 	"tule.dev/functions/internal/httpx"
 	"tule.dev/functions/internal/ids"
 	"tule.dev/functions/internal/lambdaapi"
@@ -37,7 +38,7 @@ const (
 )
 
 func (m *Module) invoke(ctx gas.Context) error {
-	name, err := m.pathFunction(ctx)
+	name, err := m.pathQualifiedFunction(ctx)
 	if err != nil {
 		return err
 	}
@@ -54,7 +55,7 @@ func (m *Module) invoke(ctx gas.Context) error {
 	if err != nil {
 		return err
 	}
-	fn, err := m.engine.Invocable(ctx, name)
+	fn, err := m.authorizedInvocable(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -75,6 +76,18 @@ func (m *Module) invoke(ctx gas.Context) error {
 	}
 	writeResult(ctx, requestID, res, tail)
 	return nil
+}
+
+// authorizedInvocable authorizes the invocation of the function name and
+// returns it, under the name's lock, so the function invoked is the one
+// evaluated. The payload is read before, so a slow body holds no lock; the
+// invocation runs after, on the function returned.
+func (m *Module) authorizedInvocable(ctx gas.Context, name string) (*contracts.Function, error) {
+	defer m.names.read(name)()
+	if err := m.authorizeQualifiedFunction(ctx, "Invoke", name); err != nil {
+		return nil, err
+	}
+	return m.engine.Invocable(ctx, name)
 }
 
 // invokeHeaders reads the invocation type, RequestResponse by default, and

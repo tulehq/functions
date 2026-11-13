@@ -25,9 +25,10 @@ type hstsSettings struct {
 // SigV4-signed with it, so both key fields are required. IdentityEndpoint is
 // the identity service's base URL, or empty to run standalone: set, a key
 // identity issued is accepted too, and identity is asked with the root key,
-// which must therefore be identity's root key as well. The event source
-// mappings' pollers sign their calls to the queues service with the root
-// key too.
+// which must therefore be identity's root key as well; the functions'
+// execution roles are assumed through identity with it too. The event
+// source mappings' pollers sign their calls to the queues service with the
+// root key, or with their functions' roles in role mode.
 type authSettings struct {
 	AccessKeyID      string
 	SecretAccessKey  string
@@ -108,7 +109,7 @@ func bindConfig(store gas.ConfigProvider, env config.Environment) (*Config, erro
 	if err := checkHTTPURL("Auth.IdentityEndpoint", cfg.Auth.IdentityEndpoint); err != nil {
 		return nil, err
 	}
-	if err := checkFunctions(cfg.Functions); err != nil {
+	if err := checkFunctions(cfg.Functions, cfg.Auth.IdentityEndpoint); err != nil {
 		return nil, err
 	}
 
@@ -138,7 +139,7 @@ var (
 // checkFunctions holds the account to 12 digits, the region to an AWS
 // region's shape, the queues endpoint to an http or https URL, and the
 // limits, the Runtime API's address and the credentials to theirs.
-func checkFunctions(f *contracts.Settings) error {
+func checkFunctions(f *contracts.Settings, identityEndpoint string) error {
 	if !accountIDPattern.MatchString(f.AccountID) {
 		return fmt.Errorf("config: Functions.AccountID %q is not 12 digits", f.AccountID)
 	}
@@ -154,7 +155,7 @@ func checkFunctions(f *contracts.Settings) error {
 	if err := checkBind(f.RuntimeAPIBind); err != nil {
 		return err
 	}
-	return checkCredentials(f)
+	return checkCredentials(f, identityEndpoint)
 }
 
 // checkLimits holds the port to 0 to 65535, and the limits to positive
@@ -187,10 +188,17 @@ func checkBind(bind string) error {
 	return nil
 }
 
-// checkCredentials holds FunctionCredentials to its three values, and a
-// custom key to both of its parts.
-func checkCredentials(f *contracts.Settings) error {
+// checkCredentials holds FunctionCredentials to its four values, a custom
+// key to both of its parts, and role to an identity endpoint, which assumes
+// the roles.
+func checkCredentials(f *contracts.Settings, identityEndpoint string) error {
 	switch f.FunctionCredentials {
+	case contracts.CredentialsRole:
+		if identityEndpoint == "" {
+			return errors.New("config: Functions.FunctionCredentials role needs " +
+				"Auth.IdentityEndpoint, through which the functions' roles are assumed")
+		}
+		fallthrough
 	case contracts.CredentialsRoot, contracts.CredentialsNone:
 		if f.FunctionAccessKeyID != "" || f.FunctionSecretAccessKey != "" {
 			return errors.New("config: Functions.FunctionAccessKeyID and " +
@@ -204,7 +212,8 @@ func checkCredentials(f *contracts.Settings) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("config: Functions.FunctionCredentials %q is not root, none or custom",
+		return fmt.Errorf(
+			"config: Functions.FunctionCredentials %q is not role, root, none or custom",
 			f.FunctionCredentials)
 	}
 }
@@ -271,10 +280,15 @@ func applyDefaults(store gas.ConfigProvider) error {
 	// A failed asynchronous invocation runs again after 1 minute, then
 	// after 2 more, as Lambda retries.
 	setDefault("Functions.AsyncRetryDelay", "1m")
-	// Every container gets the root key as its AWS credentials, as Lambda
-	// gives a function its role's, so the function's SDK can call the
-	// other Tule services.
-	setDefault("Functions.FunctionCredentials", contracts.CredentialsRoot)
+	// With identity, every container gets a session of its function's
+	// execution role, as Lambda gives it; standalone, there are no roles to
+	// assume, and it gets the root key, so the function's SDK can call the
+	// other Tule services either way.
+	credentials := contracts.CredentialsRoot
+	if v, ok := store.Find("Auth.IdentityEndpoint"); ok && fmt.Sprint(v) != "" {
+		credentials = contracts.CredentialsRole
+	}
+	setDefault("Functions.FunctionCredentials", credentials)
 	setDefault("Functions.FunctionAccessKeyID", "")
 	setDefault("Functions.FunctionSecretAccessKey", "")
 	// At most 50 containers across every function.

@@ -42,6 +42,9 @@ type container struct {
 	initFail  *outcome
 	current   *invocation
 	spec      *Spec
+	// expires is when the container's credentials expire, or zero when they
+	// do not.
+	expires   time.Time
 	id        string
 	token     string
 	logs      logBuffer
@@ -76,6 +79,11 @@ func newContainer(spec *Spec, p *pool) *container {
 		logsDone:  make(chan struct{}),
 		initFails: make(chan struct{}),
 	}
+}
+
+// expiresBy reports whether the container's credentials expire by t.
+func (c *container) expiresBy(t time.Time) bool {
+	return !c.expires.IsZero() && !c.expires.After(t)
 }
 
 // errExited is Next's answer once the container is gone.

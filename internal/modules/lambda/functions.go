@@ -7,6 +7,7 @@ import (
 
 	"github.com/gasmod/gas"
 
+	"tule.dev/functions/internal/authz"
 	"tule.dev/functions/internal/contracts"
 	"tule.dev/functions/internal/lambdaapi"
 )
@@ -65,10 +66,42 @@ func (m *Module) createFunction(ctx gas.Context) error {
 	if err != nil {
 		return err
 	}
+	defer m.names.write(fn.Name)()
+	if err = m.authorize(ctx, createRequests(m.settings.FunctionARN(fn.Name), fn)); err != nil {
+		return err
+	}
+	if err = m.engine.CheckRole(
+		ctx,
+		fn.Role,
+		fn.Name,
+		m.settings.FunctionARN(fn.Name),
+	); err != nil {
+		return err
+	}
 	if err = m.engine.CreateFunction(ctx, fn); err != nil {
 		return err
 	}
 	return lambdaapi.Write(ctx, http.StatusCreated, configOf(fn))
+}
+
+// createRequests are what CreateFunction of fn at arn needs allowed:
+// lambda:CreateFunction, iam:PassRole on its role, and lambda:TagResource
+// when it is created with tags.
+func createRequests(arn string, fn *contracts.Function) func() ([]authz.Request, error) {
+	return func() ([]authz.Request, error) {
+		tags, err := requestTags(fn.Tags)
+		if err != nil {
+			return nil, err
+		}
+		reqs := []authz.Request{request("CreateFunction", arn, tags), passRole(fn.Role)}
+		if len(fn.Tags) > 0 {
+			reqs = append(
+				reqs,
+				authz.Request{Action: actionTagResource, Resource: arn, Context: tags},
+			)
+		}
+		return reqs, nil
+	}
 }
 
 // newFunction checks a CreateFunction request and builds the function it
@@ -86,7 +119,7 @@ func (m *Module) newFunction(req *lambdaapi.CreateFunctionRequest) (*contracts.F
 	if err != nil {
 		return nil, err
 	}
-	if err = checkRole(req.Role, true); err != nil {
+	if err = m.checkRole(req.Role, true); err != nil {
 		return nil, err
 	}
 	fn := &contracts.Function{
@@ -193,8 +226,12 @@ func imageConfigOf(c *lambdaapi.ImageConfig) (contracts.ImageConfig, error) {
 }
 
 func (m *Module) getFunction(ctx gas.Context) error {
-	name, err := m.pathFunction(ctx)
+	name, err := m.pathQualifiedFunction(ctx)
 	if err != nil {
+		return err
+	}
+	defer m.names.read(name)()
+	if err = m.authorizeQualifiedFunction(ctx, "GetFunction", name); err != nil {
 		return err
 	}
 	fn, err := m.getOrNotFound(ctx, name)
@@ -210,14 +247,24 @@ func (m *Module) getFunction(ctx gas.Context) error {
 		},
 	}
 	if len(fn.Tags) > 0 {
-		resp.Tags = fn.Tags
+		show, lErr := m.mayListTags(ctx, fn)
+		if lErr != nil {
+			return lErr
+		}
+		if show {
+			resp.Tags = fn.Tags
+		}
 	}
 	return lambdaapi.Write(ctx, http.StatusOK, resp)
 }
 
 func (m *Module) getFunctionConfiguration(ctx gas.Context) error {
-	name, err := m.pathFunction(ctx)
+	name, err := m.pathQualifiedFunction(ctx)
 	if err != nil {
+		return err
+	}
+	defer m.names.read(name)()
+	if err = m.authorizeQualifiedFunction(ctx, "GetFunctionConfiguration", name); err != nil {
 		return err
 	}
 	fn, err := m.getOrNotFound(ctx, name)
@@ -240,6 +287,9 @@ func (m *Module) listFunctions(ctx gas.Context) error {
 	if err != nil {
 		return err
 	}
+	if err = m.authorize(ctx, one("ListFunctions", "*", nil)); err != nil {
+		return err
+	}
 	out, err := m.store.ListFunctions(ctx, page)
 	if err != nil {
 		return err
@@ -257,6 +307,10 @@ func (m *Module) listFunctions(ctx gas.Context) error {
 func (m *Module) updateFunctionCode(ctx gas.Context) error {
 	name, err := m.pathFunction(ctx)
 	if err != nil {
+		return err
+	}
+	defer m.names.read(name)()
+	if err = m.authorizeFunction(ctx, "UpdateFunctionCode", name); err != nil {
 		return err
 	}
 	req, err := lambdaapi.Decode[lambdaapi.UpdateFunctionCodeRequest](ctx)
@@ -313,6 +367,7 @@ func (m *Module) updateFunctionConfiguration(ctx gas.Context) error {
 	if err != nil {
 		return err
 	}
+	defer m.names.read(name)()
 	req, err := lambdaapi.Decode[lambdaapi.UpdateFunctionConfigurationRequest](ctx)
 	if err != nil {
 		return err
@@ -320,10 +375,8 @@ func (m *Module) updateFunctionConfiguration(ctx gas.Context) error {
 	if req.Runtime != nil || req.Handler != nil {
 		return lambdaapi.ErrInvalidParameter(errRuntimeOrHandler)
 	}
-	if req.Role != nil {
-		if err = checkRole(req.Role, false); err != nil {
-			return err
-		}
+	if err = m.authorizeConfiguration(ctx, name, req.Role); err != nil {
+		return err
 	}
 	fn, err := m.engine.UpdateConfiguration(ctx, name, req.RevisionID,
 		func(fn *contracts.Function) error {
@@ -339,9 +392,30 @@ func (m *Module) updateFunctionConfiguration(ctx gas.Context) error {
 	return lambdaapi.Write(ctx, http.StatusOK, configOf(fn))
 }
 
-func (m *Module) deleteFunction(ctx gas.Context) error {
-	name, err := m.pathFunction(ctx)
+// authorizeConfiguration checks and authorizes an UpdateFunctionConfiguration
+// of the function name that sets role, if it does: iam:PassRole on the role
+// besides the update, and a role Lambda can assume.
+func (m *Module) authorizeConfiguration(ctx gas.Context, name string, role *string) error {
+	if role == nil {
+		return m.authorizeFunction(ctx, "UpdateFunctionConfiguration", name)
+	}
+	if err := m.checkRole(role, false); err != nil {
+		return err
+	}
+	err := m.authorizeFunction(ctx, "UpdateFunctionConfiguration", name, passRole(*role))
 	if err != nil {
+		return err
+	}
+	return m.engine.CheckRole(ctx, *role, name, m.settings.FunctionARN(name))
+}
+
+func (m *Module) deleteFunction(ctx gas.Context) error {
+	name, err := m.pathQualifiedFunction(ctx)
+	if err != nil {
+		return err
+	}
+	defer m.names.write(name)()
+	if err = m.authorizeQualifiedFunction(ctx, "DeleteFunction", name); err != nil {
 		return err
 	}
 	if err = m.engine.DeleteFunction(ctx, name); err != nil {

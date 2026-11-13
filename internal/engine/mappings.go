@@ -186,14 +186,20 @@ func (e *Engine) resumeMappings(ctx context.Context) error {
 	return nil
 }
 
-// sqsClient returns a client for the queues service in region, signed with
-// the configured key.
-func (e *Engine) sqsClient(region string) *sqs.Client {
+// sqsClient returns a client for the queues service in region for the
+// mappings of the function name: signed with its execution role's session
+// in role mode, as Lambda polls a queue with the function's execution role,
+// else with the configured key.
+func (e *Engine) sqsClient(region, function string) *sqs.Client {
+	var creds aws.CredentialsProvider = credentials.NewStaticCredentialsProvider(
+		e.accessKeyID, e.secretAccessKey, "")
+	if e.settings.FunctionCredentials == contracts.CredentialsRole {
+		creds = &roleProvider{e: e, name: function}
+	}
 	return sqs.New(sqs.Options{
 		Region:       region,
 		BaseEndpoint: aws.String(e.settings.QueuesEndpoint),
-		Credentials: credentials.NewStaticCredentialsProvider(
-			e.accessKeyID, e.secretAccessKey, ""),
+		Credentials:  creds,
 	})
 }
 
@@ -219,7 +225,7 @@ func (e *Engine) startPoller(ctx context.Context, m *contracts.Mapping) {
 	}
 	uuid, function := m.UUID, m.FunctionName
 	cfg := &poller.Config{
-		Client:  e.sqsClient(q.Region),
+		Client:  e.sqsClient(q.Region, m.FunctionName),
 		Logger:  e.logger,
 		Mapping: *m,
 		Region:  q.Region,
@@ -302,7 +308,7 @@ func (e *Engine) CheckVisibilityTimeout(
 	if !ok {
 		return lambdaapi.ErrInvalidParameter("The event source ARN is not an SQS queue ARN.")
 	}
-	client := e.sqsClient(q.Region)
+	client := e.sqsClient(q.Region, fn.Name)
 	url, err := client.GetQueueUrl(ctx, &sqs.GetQueueUrlInput{
 		QueueName: aws.String(q.Name), QueueOwnerAWSAccountId: aws.String(q.Account),
 	})

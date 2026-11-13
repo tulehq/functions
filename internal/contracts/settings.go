@@ -18,9 +18,10 @@ type Settings struct {
 	Region                  string `validate:"required"`
 	DockerHost              string `validate:"required"`
 	// FunctionCredentials is what the containers get as their AWS
-	// credentials: the root key (CredentialsRoot), none (CredentialsNone),
-	// or FunctionAccessKeyID and FunctionSecretAccessKey
-	// (CredentialsCustom).
+	// credentials: a session of the function's execution role, assumed
+	// through identity (CredentialsRole), the root key (CredentialsRoot),
+	// none (CredentialsNone), or FunctionAccessKeyID and
+	// FunctionSecretAccessKey (CredentialsCustom).
 	FunctionCredentials string `validate:"required"`
 	// RuntimeAPIBind is the address the Runtime API listens on; empty, the
 	// address on the Docker host the containers reach it at.
@@ -39,6 +40,7 @@ type Settings struct {
 
 // The values of Settings.FunctionCredentials.
 const (
+	CredentialsRole   = "role"
 	CredentialsRoot   = "root"
 	CredentialsNone   = "none"
 	CredentialsCustom = "custom"

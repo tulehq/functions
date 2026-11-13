@@ -30,14 +30,19 @@ const (
 )
 
 type identityStack struct {
-	srv       *server
-	iam       *iam.Client
-	rootCreds aws.Credentials
+	srv         *server
+	iam         *iam.Client
+	identityURL string
+	rootCreds   aws.Credentials
 }
 
 func TestIdentityIssuedKeys(t *testing.T) {
 	s := startIdentityStack(t)
 	userKey := createUserKey(t, s.iam, "dev")
+	// Identity-issued keys are held to their identity policies: this one
+	// needs the Lambda actions and tule:Inspect for the retrieval API.
+	putUserPolicy(t, s.iam, "dev", "functions",
+		allowDoc(`["lambda:*","iam:PassRole","tule:Inspect"]`, `"*"`))
 
 	t.Run("a user key works", func(t *testing.T) {
 		c := lambdaClientWith(s.srv, userKey)
@@ -71,6 +76,11 @@ func startIdentityStack(t *testing.T) *identityStack {
 		"TULE_Auth_IdentityEndpoint": identity.URL,
 	})
 	s.iam = iamClient(identity.URL, s.rootCreds)
+	s.identityURL = identity.URL
+	// With identity, the functions run with their execution roles'
+	// credentials, so the role every test function is created with must be
+	// one Lambda can assume.
+	createRole(t, s.iam, "lambda-role", lambdaTrust, "")
 	return s
 }
 
@@ -87,6 +97,7 @@ func (s *identityStack) testInactiveKey(t *testing.T) {
 
 func (s *identityStack) testDeletedKey(t *testing.T) {
 	key := createUserKey(t, s.iam, "deleted")
+	putUserPolicy(t, s.iam, "deleted", "list", allowDoc(`"lambda:ListFunctions"`, `"*"`))
 	_, err := lambdaClientWith(s.srv, key).ListFunctions(t.Context(), &lambda.ListFunctionsInput{})
 	requireNoErr(t, err, "list functions before the key is deleted")
 
@@ -146,4 +157,34 @@ func createUserKey(t *testing.T, ic *iam.Client, user string) aws.Credentials {
 		AccessKeyID:     aws.ToString(out.AccessKey.AccessKeyId),
 		SecretAccessKey: aws.ToString(out.AccessKey.SecretAccessKey),
 	}
+}
+
+// lambdaTrust is the trust policy the Lambda Developer Guide gives an
+// execution role.
+const lambdaTrust = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",` +
+	`"Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
+
+// roleARN is the ARN of the role name in identity's default account.
+func roleARN(name string) string {
+	return "arn:aws:iam::" + defaultAccountID + ":role/" + name
+}
+
+// createRole creates the role name with the trust policy trust and the
+// inline identity policy doc, if any.
+func createRole(t *testing.T, ic *iam.Client, name, trust, doc string) {
+	t.Helper()
+	_, err := ic.CreateRole(t.Context(), &iam.CreateRoleInput{
+		RoleName:                 aws.String(name),
+		AssumeRolePolicyDocument: aws.String(trust),
+	})
+	requireNoErr(t, err, "create role "+name)
+	if doc == "" {
+		return
+	}
+	_, err = ic.PutRolePolicy(t.Context(), &iam.PutRolePolicyInput{
+		RoleName:       aws.String(name),
+		PolicyName:     aws.String("permissions"),
+		PolicyDocument: aws.String(doc),
+	})
+	requireNoErr(t, err, "put a policy on role "+name)
 }

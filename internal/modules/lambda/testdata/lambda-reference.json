@@ -1,0 +1,1060 @@
+{
+ "Actions": {
+  "AddLayerVersionPermission": {
+   "ConditionKeys": [],
+   "Resources": [
+    "layerVersion"
+   ]
+  },
+  "AddPermission": {
+   "ConditionKeys": [
+    "lambda:FunctionUrlAuthType",
+    "lambda:Principal"
+   ],
+   "Resources": [
+    "function"
+   ]
+  },
+  "CheckpointDurableExecution": {
+   "ConditionKeys": [],
+   "Resources": [
+    "durable execution"
+   ]
+  },
+  "ConnectMicrovm": {
+   "ConditionKeys": [],
+   "Resources": []
+  },
+  "CreateAlias": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "CreateCapacityProvider": {
+   "ConditionKeys": [
+    "aws:RequestTag/${TagKey}",
+    "aws:TagKeys",
+    "lambda:SecurityGroupIds",
+    "lambda:SubnetIds"
+   ],
+   "Resources": [
+    "capacityProvider"
+   ]
+  },
+  "CreateCodeSigningConfig": {
+   "ConditionKeys": [
+    "aws:RequestTag/${TagKey}",
+    "aws:TagKeys"
+   ],
+   "Resources": []
+  },
+  "CreateEventSourceMapping": {
+   "ConditionKeys": [
+    "aws:RequestTag/${TagKey}",
+    "aws:TagKeys",
+    "lambda:FunctionArn"
+   ],
+   "Resources": []
+  },
+  "CreateFunction": {
+   "ConditionKeys": [
+    "aws:RequestTag/${TagKey}",
+    "aws:TagKeys",
+    "lambda:CodeSigningConfigArn",
+    "lambda:Layer",
+    "lambda:SecurityGroupIds",
+    "lambda:SubnetIds",
+    "lambda:VpcIds"
+   ],
+   "Resources": [
+    "function"
+   ]
+  },
+  "CreateFunctionUrlConfig": {
+   "ConditionKeys": [
+    "lambda:FunctionArn",
+    "lambda:FunctionUrlAuthType"
+   ],
+   "Resources": [
+    "function"
+   ]
+  },
+  "CreateMicrovmAuthToken": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "CreateMicrovmImage": {
+   "ConditionKeys": [
+    "aws:RequestTag/${TagKey}",
+    "aws:TagKeys"
+   ],
+   "Resources": []
+  },
+  "CreateMicrovmShellAuthToken": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "CreateNetworkConnector": {
+   "ConditionKeys": [
+    "aws:RequestTag/${TagKey}",
+    "aws:TagKeys",
+    "lambda:SecurityGroupIds",
+    "lambda:SubnetIds"
+   ],
+   "Resources": [
+    "networkConnector"
+   ]
+  },
+  "CreateWebFunction": {
+   "ConditionKeys": [
+    "aws:RequestTag/${TagKey}",
+    "aws:TagKeys",
+    "lambda:Request/WebFunctionAuthType"
+   ],
+   "Resources": [
+    "webFunction"
+   ]
+  },
+  "CreateWebFunctionEndpoint": {
+   "ConditionKeys": [
+    "lambda:Request/WebFunctionAuthType"
+   ],
+   "Resources": [
+    "webFunction"
+   ]
+  },
+  "CreateWebFunctionRevision": {
+   "ConditionKeys": [],
+   "Resources": [
+    "webFunction"
+   ]
+  },
+  "DeleteAlias": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "DeleteCapacityProvider": {
+   "ConditionKeys": [],
+   "Resources": [
+    "capacityProvider"
+   ]
+  },
+  "DeleteCodeSigningConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "code signing config"
+   ]
+  },
+  "DeleteEventSourceMapping": {
+   "ConditionKeys": [
+    "lambda:FunctionArn"
+   ],
+   "Resources": [
+    "eventSourceMapping"
+   ]
+  },
+  "DeleteFunction": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "DeleteFunctionCodeSigningConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "DeleteFunctionConcurrency": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "DeleteFunctionEventInvokeConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "DeleteFunctionUrlConfig": {
+   "ConditionKeys": [
+    "lambda:FunctionArn",
+    "lambda:FunctionUrlAuthType"
+   ],
+   "Resources": [
+    "function"
+   ]
+  },
+  "DeleteLayerVersion": {
+   "ConditionKeys": [],
+   "Resources": [
+    "layerVersion"
+   ]
+  },
+  "DeleteMicrovmImage": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "DeleteMicrovmImageVersion": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "DeleteNetworkConnector": {
+   "ConditionKeys": [],
+   "Resources": [
+    "networkConnector"
+   ]
+  },
+  "DeleteProvisionedConcurrencyConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function alias",
+    "function version"
+   ]
+  },
+  "DeleteResourcePolicy": {
+   "ConditionKeys": [
+    "lambda:Principal"
+   ],
+   "Resources": [
+    "function",
+    "webFunction"
+   ]
+  },
+  "DeleteWebFunction": {
+   "ConditionKeys": [],
+   "Resources": [
+    "webFunction"
+   ]
+  },
+  "DeleteWebFunctionEndpoint": {
+   "ConditionKeys": [
+    "lambda:Resource/WebFunctionAuthType"
+   ],
+   "Resources": [
+    "webFunctionEndpoint"
+   ]
+  },
+  "DeleteWebFunctionRevision": {
+   "ConditionKeys": [],
+   "Resources": [
+    "webFunctionRevision"
+   ]
+  },
+  "DisableReplication": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "EnableReplication": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "GetAccountSettings": {
+   "ConditionKeys": [],
+   "Resources": []
+  },
+  "GetAlias": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "GetCapacityProvider": {
+   "ConditionKeys": [],
+   "Resources": [
+    "capacityProvider"
+   ]
+  },
+  "GetCodeSigningConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "code signing config"
+   ]
+  },
+  "GetDurableExecution": {
+   "ConditionKeys": [],
+   "Resources": [
+    "durable execution"
+   ]
+  },
+  "GetDurableExecutionHistory": {
+   "ConditionKeys": [],
+   "Resources": [
+    "durable execution"
+   ]
+  },
+  "GetDurableExecutionState": {
+   "ConditionKeys": [],
+   "Resources": [
+    "durable execution"
+   ]
+  },
+  "GetEventSourceMapping": {
+   "ConditionKeys": [
+    "lambda:FunctionArn"
+   ],
+   "Resources": [
+    "eventSourceMapping"
+   ]
+  },
+  "GetFunction": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "GetFunctionCodeSigningConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "GetFunctionConcurrency": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "GetFunctionConfiguration": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "GetFunctionEventInvokeConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "GetFunctionRecursionConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "GetFunctionScalingConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "GetFunctionUrlConfig": {
+   "ConditionKeys": [
+    "lambda:FunctionArn",
+    "lambda:FunctionUrlAuthType"
+   ],
+   "Resources": [
+    "function"
+   ]
+  },
+  "GetLayerVersion": {
+   "ConditionKeys": [],
+   "Resources": [
+    "layerVersion"
+   ]
+  },
+  "GetLayerVersionPolicy": {
+   "ConditionKeys": [],
+   "Resources": [
+    "layerVersion"
+   ]
+  },
+  "GetMicrovm": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "GetMicrovmImage": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "GetMicrovmImageBuild": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "GetMicrovmImageVersion": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "GetNetworkConnector": {
+   "ConditionKeys": [],
+   "Resources": [
+    "networkConnector"
+   ]
+  },
+  "GetPolicy": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "GetProvisionedConcurrencyConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function alias",
+    "function version"
+   ]
+  },
+  "GetResourcePolicy": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function",
+    "webFunction"
+   ]
+  },
+  "GetRuntimeManagementConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "GetWebAccountSettings": {
+   "ConditionKeys": [],
+   "Resources": []
+  },
+  "GetWebFunction": {
+   "ConditionKeys": [],
+   "Resources": [
+    "webFunction"
+   ]
+  },
+  "GetWebFunctionEndpoint": {
+   "ConditionKeys": [
+    "lambda:Resource/WebFunctionAuthType"
+   ],
+   "Resources": [
+    "webFunctionEndpoint"
+   ]
+  },
+  "GetWebFunctionRevision": {
+   "ConditionKeys": [],
+   "Resources": [
+    "webFunctionRevision"
+   ]
+  },
+  "InvokeAsync": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "InvokeFunction": {
+   "ConditionKeys": [
+    "lambda:EventSourceToken",
+    "lambda:InvokedViaFunctionUrl"
+   ],
+   "Resources": [
+    "function"
+   ]
+  },
+  "InvokeFunctionUrl": {
+   "ConditionKeys": [
+    "lambda:EventSourceToken",
+    "lambda:FunctionArn",
+    "lambda:FunctionUrlAuthType"
+   ],
+   "Resources": [
+    "function"
+   ]
+  },
+  "InvokeWebFunctionEndpoint": {
+   "ConditionKeys": [
+    "lambda:Resource/WebFunctionAuthType"
+   ],
+   "Resources": [
+    "webFunctionEndpoint"
+   ]
+  },
+  "ListAliases": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "ListCapacityProviders": {
+   "ConditionKeys": [],
+   "Resources": []
+  },
+  "ListCodeSigningConfigs": {
+   "ConditionKeys": [],
+   "Resources": []
+  },
+  "ListDurableExecutionsByFunction": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "ListEventSourceMappings": {
+   "ConditionKeys": [],
+   "Resources": []
+  },
+  "ListFunctionEventInvokeConfigs": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "ListFunctionUrlConfigs": {
+   "ConditionKeys": [
+    "lambda:FunctionUrlAuthType"
+   ],
+   "Resources": [
+    "function"
+   ]
+  },
+  "ListFunctionVersionsByCapacityProvider": {
+   "ConditionKeys": [],
+   "Resources": [
+    "capacityProvider"
+   ]
+  },
+  "ListFunctions": {
+   "ConditionKeys": [],
+   "Resources": []
+  },
+  "ListFunctionsByCodeSigningConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "code signing config"
+   ]
+  },
+  "ListLayerVersions": {
+   "ConditionKeys": [],
+   "Resources": []
+  },
+  "ListLayers": {
+   "ConditionKeys": [],
+   "Resources": []
+  },
+  "ListManagedMicrovmImageVersions": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "ListManagedMicrovmImages": {
+   "ConditionKeys": [],
+   "Resources": []
+  },
+  "ListMicrovmImageBuilds": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "ListMicrovmImageVersions": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "ListMicrovmImages": {
+   "ConditionKeys": [],
+   "Resources": []
+  },
+  "ListMicrovms": {
+   "ConditionKeys": [],
+   "Resources": []
+  },
+  "ListNetworkConnectorVersions": {
+   "ConditionKeys": [],
+   "Resources": [
+    "networkConnector"
+   ]
+  },
+  "ListNetworkConnectors": {
+   "ConditionKeys": [],
+   "Resources": []
+  },
+  "ListProvisionedConcurrencyConfigs": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "ListTags": {
+   "ConditionKeys": [],
+   "Resources": [
+    "capacityProvider",
+    "code signing config",
+    "eventSourceMapping",
+    "function",
+    "microvmImage",
+    "networkConnector",
+    "webFunction"
+   ]
+  },
+  "ListVersionsByFunction": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "ListWebFunctionEndpoints": {
+   "ConditionKeys": [],
+   "Resources": [
+    "webFunction"
+   ]
+  },
+  "ListWebFunctionRevisions": {
+   "ConditionKeys": [],
+   "Resources": [
+    "webFunction"
+   ]
+  },
+  "ListWebFunctions": {
+   "ConditionKeys": [],
+   "Resources": []
+  },
+  "PassCapacityProvider": {
+   "ConditionKeys": [],
+   "Resources": [
+    "capacityProvider"
+   ]
+  },
+  "PassNetworkConnector": {
+   "ConditionKeys": [],
+   "Resources": []
+  },
+  "PublishLayerVersion": {
+   "ConditionKeys": [],
+   "Resources": [
+    "layer"
+   ]
+  },
+  "PublishVersion": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "PutFunctionCodeSigningConfig": {
+   "ConditionKeys": [
+    "lambda:CodeSigningConfigArn"
+   ],
+   "Resources": [
+    "code signing config",
+    "function"
+   ]
+  },
+  "PutFunctionConcurrency": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "PutFunctionEventInvokeConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "PutFunctionRecursionConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "PutFunctionScalingConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "PutProvisionedConcurrencyConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function alias",
+    "function version"
+   ]
+  },
+  "PutResourcePolicy": {
+   "ConditionKeys": [
+    "lambda:Principal"
+   ],
+   "Resources": [
+    "function",
+    "webFunction"
+   ]
+  },
+  "PutRuntimeManagementConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "RemoveLayerVersionPermission": {
+   "ConditionKeys": [],
+   "Resources": [
+    "layerVersion"
+   ]
+  },
+  "RemovePermission": {
+   "ConditionKeys": [
+    "lambda:FunctionUrlAuthType",
+    "lambda:Principal"
+   ],
+   "Resources": [
+    "function"
+   ]
+  },
+  "ResumeMicrovm": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "RunMicrovm": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "SendDurableExecutionCallbackFailure": {
+   "ConditionKeys": [],
+   "Resources": [
+    "durable execution"
+   ]
+  },
+  "SendDurableExecutionCallbackHeartbeat": {
+   "ConditionKeys": [],
+   "Resources": [
+    "durable execution"
+   ]
+  },
+  "SendDurableExecutionCallbackSuccess": {
+   "ConditionKeys": [],
+   "Resources": [
+    "durable execution"
+   ]
+  },
+  "StopDurableExecution": {
+   "ConditionKeys": [],
+   "Resources": [
+    "durable execution"
+   ]
+  },
+  "SuspendMicrovm": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "TagResource": {
+   "ConditionKeys": [
+    "aws:RequestTag/${TagKey}",
+    "aws:TagKeys"
+   ],
+   "Resources": [
+    "capacityProvider",
+    "code signing config",
+    "eventSourceMapping",
+    "function",
+    "microvmImage",
+    "networkConnector",
+    "webFunction"
+   ]
+  },
+  "TerminateMicrovm": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "UntagResource": {
+   "ConditionKeys": [
+    "aws:TagKeys"
+   ],
+   "Resources": [
+    "capacityProvider",
+    "code signing config",
+    "eventSourceMapping",
+    "function",
+    "microvmImage",
+    "networkConnector",
+    "webFunction"
+   ]
+  },
+  "UpdateAlias": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "UpdateCapacityProvider": {
+   "ConditionKeys": [],
+   "Resources": [
+    "capacityProvider"
+   ]
+  },
+  "UpdateCodeSigningConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "code signing config"
+   ]
+  },
+  "UpdateEventSourceMapping": {
+   "ConditionKeys": [
+    "lambda:FunctionArn"
+   ],
+   "Resources": [
+    "eventSourceMapping"
+   ]
+  },
+  "UpdateFunctionCode": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "UpdateFunctionCodeSigningConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "code signing config",
+    "function"
+   ]
+  },
+  "UpdateFunctionConfiguration": {
+   "ConditionKeys": [
+    "lambda:Layer",
+    "lambda:SecurityGroupIds",
+    "lambda:SubnetIds",
+    "lambda:VpcIds"
+   ],
+   "Resources": [
+    "function"
+   ]
+  },
+  "UpdateFunctionEventInvokeConfig": {
+   "ConditionKeys": [],
+   "Resources": [
+    "function"
+   ]
+  },
+  "UpdateFunctionUrlConfig": {
+   "ConditionKeys": [
+    "lambda:FunctionArn",
+    "lambda:FunctionUrlAuthType"
+   ],
+   "Resources": [
+    "function"
+   ]
+  },
+  "UpdateMicrovmImage": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "UpdateMicrovmImageVersion": {
+   "ConditionKeys": [],
+   "Resources": [
+    "microvmImage"
+   ]
+  },
+  "UpdateNetworkConnector": {
+   "ConditionKeys": [],
+   "Resources": [
+    "networkConnector"
+   ]
+  },
+  "UpdateWebFunctionEndpoint": {
+   "ConditionKeys": [
+    "lambda:Request/WebFunctionAuthType",
+    "lambda:Resource/WebFunctionAuthType"
+   ],
+   "Resources": [
+    "webFunctionEndpoint"
+   ]
+  }
+ },
+ "Operations": {
+  "CreateEventSourceMapping": [
+   {
+    "Name": "CreateEventSourceMapping",
+    "Service": "lambda"
+   },
+   {
+    "Name": "TagResource",
+    "Service": "lambda"
+   }
+  ],
+  "CreateFunction": [
+   {
+    "Name": "CreateFunction",
+    "Service": "lambda"
+   },
+   {
+    "Name": "GetLayerVersion",
+    "Service": "lambda"
+   },
+   {
+    "Name": "PassCapacityProvider",
+    "Service": "lambda"
+   },
+   {
+    "Context": {
+     "iam:PassedToService": [
+      "lambda.amazonaws.com"
+     ]
+    },
+    "Name": "PassRole",
+    "Service": "iam"
+   },
+   {
+    "Name": "TagResource",
+    "Service": "lambda"
+   }
+  ],
+  "DeleteEventSourceMapping": [
+   {
+    "Name": "DeleteEventSourceMapping",
+    "Service": "lambda"
+   }
+  ],
+  "DeleteFunction": [
+   {
+    "Name": "DeleteFunction",
+    "Service": "lambda"
+   }
+  ],
+  "GetEventSourceMapping": [
+   {
+    "Name": "GetEventSourceMapping",
+    "Service": "lambda"
+   }
+  ],
+  "GetFunction": [
+   {
+    "Name": "GetFunction",
+    "Service": "lambda"
+   },
+   {
+    "Name": "ListTags",
+    "Service": "lambda"
+   }
+  ],
+  "GetFunctionConfiguration": [
+   {
+    "Name": "GetFunctionConfiguration",
+    "Service": "lambda"
+   }
+  ],
+  "Invoke": [
+   {
+    "Name": "InvokeFunction",
+    "Service": "lambda"
+   }
+  ],
+  "ListEventSourceMappings": [
+   {
+    "Name": "ListEventSourceMappings",
+    "Service": "lambda"
+   }
+  ],
+  "ListFunctions": [
+   {
+    "Name": "ListFunctions",
+    "Service": "lambda"
+   }
+  ],
+  "ListTags": [
+   {
+    "Name": "ListTags",
+    "Service": "lambda"
+   }
+  ],
+  "TagResource": [
+   {
+    "Name": "TagResource",
+    "Service": "lambda"
+   }
+  ],
+  "UntagResource": [
+   {
+    "Name": "UntagResource",
+    "Service": "lambda"
+   }
+  ],
+  "UpdateEventSourceMapping": [
+   {
+    "Name": "UpdateEventSourceMapping",
+    "Service": "lambda"
+   }
+  ],
+  "UpdateFunctionCode": [
+   {
+    "Name": "UpdateFunctionCode",
+    "Service": "lambda"
+   }
+  ],
+  "UpdateFunctionConfiguration": [
+   {
+    "Name": "GetLayerVersion",
+    "Service": "lambda"
+   },
+   {
+    "Name": "PassCapacityProvider",
+    "Service": "lambda"
+   },
+   {
+    "Context": {
+     "iam:PassedToService": [
+      "lambda.amazonaws.com"
+     ]
+    },
+    "Name": "PassRole",
+    "Service": "iam"
+   },
+   {
+    "Name": "UpdateFunctionConfiguration",
+    "Service": "lambda"
+   }
+  ]
+ },
+ "Resources": {
+  "eventSourceMapping": {
+   "ARNFormats": [
+    "arn:${Partition}:lambda:${Region}:${Account}:event-source-mapping:${UUID}"
+   ],
+   "ConditionKeys": [
+    "aws:ResourceTag/${TagKey}"
+   ]
+  },
+  "function": {
+   "ARNFormats": [
+    "arn:${Partition}:lambda:${Region}:${Account}:function:${FunctionName}"
+   ],
+   "ConditionKeys": [
+    "aws:ResourceTag/${TagKey}"
+   ]
+  }
+ },
+ "Source": "https://servicereference.us-east-1.amazonaws.com/v1/lambda/lambda.json",
+ "Version": "v1.5"
+}
