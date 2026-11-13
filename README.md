@@ -228,6 +228,10 @@ pulls nothing.
 | `DeleteFunction` | `204`. Removes the function's containers at once, those running an invocation included, and deletes its event source mappings |
 | `Invoke` | `RequestResponse` (`200`, the function's result, or its error document with `X-Amz-Function-Error`), `Event` (`202`, run in the background with Lambda's retries) and `DryRun` (`204`). `LogType` `Tail` returns the last 4 KB of the log in `X-Amz-Log-Result`. `ClientContext` reaches the function as `Lambda-Runtime-Client-Context`. Payloads are JSON, up to 6 MB synchronous and 1 MB asynchronous; an empty payload is `{}` |
 | `TagResource` / `UntagResource` / `ListTags` | On functions and event source mappings, by ARN; up to 50 tags |
+| `AddPermission` | Adds an `Allow` statement to the function policy ([Function policies](#function-policies)): `StatementId`, `Action`, `Principal`, `SourceArn`, `SourceAccount`, `PrincipalOrgID`, `FunctionUrlAuthType`, `InvokedViaFunctionUrl`, `EventSourceToken`, `RevisionId`. Answers `201` with the statement |
+| `RemovePermission` | Removes the statement `StatementId`; `RevisionId`. `204` |
+| `GetPolicy` | The function policy and its `RevisionId` |
+| `PutResourcePolicy` / `GetResourcePolicy` / `DeleteResourcePolicy` | The function policy whole, by the function's ARN; `RevisionId`. `PutResourcePolicy` replaces what `AddPermission` built |
 | `CreateEventSourceMapping` | SQS queues only: `EventSourceArn`, `FunctionName`, `BatchSize` (default 10; up to 10000, 10 for a FIFO queue, more than 10 only with a batching window), `MaximumBatchingWindowInSeconds` (0 to 300), `Enabled`, `FunctionResponseTypes` (`ReportBatchItemFailures`), `ScalingConfig.MaximumConcurrency` (2 to 1000) and `Tags`. Refused when the function's timeout exceeds the queue's visibility timeout. Answers `202` `Creating`, then `Enabled` or `Disabled` |
 | `GetEventSourceMapping` / `ListEventSourceMappings` | `ListEventSourceMappings` filters by `FunctionName` and `EventSourceArn`; `Marker` and `MaxItems` (default 100) |
 | `UpdateEventSourceMapping` | The same members as create but the queue. Answers `202` `Updating`, then `Enabled` or `Disabled`; the visibility timeout is checked again |
@@ -244,7 +248,8 @@ does not exist is `404` `ResourceNotFoundException`; an operation on a
 is `409` `ResourceConflictException`; a bad member is `400`
 `InvalidParameterValueException`, or `ValidationException` for a value
 outside the model's constraints; a mismatched `RevisionId` is `412`
-`PreconditionFailedException`.
+`PreconditionFailedException`; a function policy over 20 KB is `400`
+`PolicyLengthExceededException`.
 
 ## Permissions
 
@@ -252,26 +257,33 @@ The configured key, and identity's root key, are the account's root user:
 they are never evaluated against policies, as AWS never evaluates the root
 user, and may call every operation. Root is the root user of the service's
 own account, `TULE_Functions_AccountID`, only: a principal identity marks
-as root in another account is treated as any principal of another account,
-below. Without `TULE_Auth_IdentityEndpoint`
+as root in another account is evaluated as a principal of another account
+([Function policies](#function-policies)), whose root user has full access
+to its own account and so needs only the function policy's grant. Without `TULE_Auth_IdentityEndpoint`
 they are the only keys, so a standalone service evaluates nothing.
 
 With it, every other key identity issued, an IAM user's or a role
 session's, is evaluated on every request against the identity policies
 identity sends with it (the user's inline and attached managed policies, or
-the session's role's), with [tule.dev/policy](https://github.com/tulehq/policy):
-an explicit `Deny` wins, otherwise the request needs an `Allow`. A request
-no policy allows is `403` `AccessDeniedException`, the Lambda API's common
-error, with AWS's message:
+the session's role's) and the policy of the function it acts on, if any,
+with [tule.dev/policy](https://github.com/tulehq/policy)'s `Authorize`, as
+AWS evaluates the two kinds together ([Function policies](#function-policies)):
+an explicit `Deny` in either wins, otherwise the request needs an `Allow`.
+A request no policy allows is `403` `AccessDeniedException`, the Lambda
+API's common error, with AWS's message:
 
 ```
 User: arn:aws:iam::000000000000:user/dev is not authorized to perform: lambda:GetFunction on resource: arn:aws:lambda:us-east-1:000000000000:function:hello because no identity-based policy allows the lambda:GetFunction action
 ```
 
-or, for a `Deny`, "... on resource: \<arn\> with an explicit deny in an
-identity-based policy". The operation is authorized before the function or
-mapping is looked up, so a denied request on one that does not exist is
-denied, not `404`.
+The message ends with the reason tule.dev/policy gives (`Reason.Message`,
+the IAM User Guide's "Troubleshooting access denied error messages"
+wording): "with an explicit deny in an identity-based policy", "with an
+explicit deny in a resource-based policy", "because no identity-based
+policy allows the \<action\> action" or "because no resource-based policy
+allows the \<action\> action". The operation is authorized before the
+function or mapping is looked up, so a denied request on one that does not
+exist is denied, not `404`.
 
 Each operation is evaluated as the action and resource the
 [Service Authorization Reference for Lambda](https://docs.aws.amazon.com/service-authorization/latest/reference/list_awslambda.html)
@@ -284,6 +296,10 @@ gives it, in `internal/modules/lambda/actions.go`:
 | `UpdateFunctionConfiguration` | `lambda:UpdateFunctionConfiguration`, and `iam:PassRole` on a `Role` it sets | the function |
 | `Invoke` | `lambda:InvokeFunction` | the function |
 | `ListFunctions` | `lambda:ListFunctions` | `*` |
+| `AddPermission`, `RemovePermission`, `GetPolicy` | `lambda:` and the operation | the function, with `:$LATEST` when the request names it |
+| `PutResourcePolicy` | `lambda:PutResourcePolicy`, `lambda:AddPermission` and `lambda:RemovePermission` | the function |
+| `GetResourcePolicy` | `lambda:GetResourcePolicy` and `lambda:GetPolicy` | the function |
+| `DeleteResourcePolicy` | `lambda:DeleteResourcePolicy` and `lambda:RemovePermission` | the function |
 | `TagResource`, `UntagResource`, `ListTags` | `lambda:` and the operation | the function or mapping |
 | `CreateEventSourceMapping` | `lambda:CreateEventSourceMapping`, and `lambda:TagResource` on the new mapping with `Tags` | `*` |
 | `ListEventSourceMappings` | `lambda:ListEventSourceMappings` | `*` |
@@ -323,17 +339,23 @@ peer address), `aws:CurrentTime`, `aws:EpochTime`, `aws:SecureTransport`,
 `aws:RequestedRegion` (the service's region, `TULE_Functions_Region`, not
 the region a request is signed for: any signed region verifies, and the
 request acts in the service's region, as an AWS endpoint fixes it),
-`aws:PrincipalAccount`, `aws:PrincipalArn`, `aws:PrincipalType` and, for an
-IAM user, `aws:username`; and the Lambda keys the reference lists:
+`aws:PrincipalTag/<key>` from the tags of the IAM user or of the session's
+role (identity issues no session tags), and, from the principal attributes
+identity sends (signing-key version 3), `aws:PrincipalAccount`,
+`aws:PrincipalArn` (for a role session, its role's ARN with the role's
+path), `aws:userid`, `aws:PrincipalType` and, for an IAM user,
+`aws:username`; and the Lambda keys the reference lists:
 `aws:ResourceTag/<key>` from the tags of the function or mapping acted on,
 `aws:RequestTag/<key>` and `aws:TagKeys` from the tags `CreateFunction`,
 `TagResource` and `CreateEventSourceMapping` set (`aws:TagKeys` from
 `UntagResource`'s keys), and `lambda:FunctionArn` on the mapping
 operations: the function the mapping invokes, and for an
 `UpdateEventSourceMapping` that names another function, that one too, each
-of which must be allowed. They fill policy variables such as
-`${aws:username}` as well. A request whose condition keys pass the caps the
-policy library asks services to apply (128 keys of at most 256 bytes, 50
+of which must be allowed; and `lambda:Principal` (the request's `Principal`)
+and `lambda:FunctionUrlAuthType` on `AddPermission`. They fill policy
+variables such as `${aws:username}` as well. A request whose condition keys
+pass the caps the policy library asks services to apply (192 keys of at
+most 256 bytes, 50
 values of a key, 1024 bytes a value) is refused with
 `InvalidParameterValueException` rather than evaluated; Lambda's own limits
 keep every valid request inside them. Every resource name a request gives is
@@ -350,28 +372,102 @@ operation holds the function's name from authorization until it has acted,
 and `CreateFunction` and `DeleteFunction` wait for it, so a function cannot
 be deleted and created again under its name in between (an `Invoke` holds
 it until the function to invoke is resolved, not while it runs). A
-mapping's UUID is never reused, so it needs no such hold. What can change in
-between is an attribute: a tag, or the function a mapping invokes, read at
-authorization may be stale when the operation acts.
+mapping's UUID is never reused, so it needs no such hold. The function
+policy is read with the function's tags in the same read, under that hold,
+and the operations that change the policy wait for it too, so the policy
+evaluated is the one in effect until the operation has acted. What can
+change in between is an attribute: a tag, or the function a mapping
+invokes, read at authorization may be stale when the operation acts.
 
 A request is decoded once, and authorized on the values the operation then
 acts on: a JSON member given twice, or in two cases (`Role` and `role`),
 or a query parameter given twice, resolves to one value, as Go's decoder
 resolves it (the last member, the first parameter), for both.
 
-Functions has no resource-based policies (`AddPermission` is not served),
-so only identity policies decide.
+A principal identity marks as root must be of type `Account`, and one of
+type `Account` must be root: they decide, between them, whether a request
+is evaluated at all and whether the policy library grants it the root
+user's full access, so a principal whose two disagree is a fault, `500`
+`ServiceException`, logged, rather than evaluated either way.
 
-**A principal of another account is denied every operation**, the
-retrieval API included. In AWS a cross-account request needs a
-resource-based policy that allows it as well as the caller's identity
-policies, and here nothing can grant one; and since every account's keys
-share the same functions, allowing it would let a member account's
-administrator reach the management account's functions. Its identity
-policies are evaluated first, so a `Deny` or a missing `Allow` is reported
-as usual; when they allow the request, the message ends "because no
-resource-based policy allows the \<action\> action". The service's account
-is `TULE_Functions_AccountID`.
+### Function policies
+
+Each function has at most one resource-based policy, its function policy,
+which the Lambda API keeps and this service evaluates:
+
+- **AddPermission** adds one `Allow` statement, in the form Lambda writes
+  (the AWS CLI reference's add-permission output): `Sid` the
+  `StatementId`, `Principal` `"*"`, `{"AWS": "arn:aws:iam::<id>:root"}` for
+  an account ID, `{"AWS": <arn>}` for a user or role ARN, or
+  `{"Service": <it>}` for a service identifier such as `sns.amazonaws.com`,
+  `Action` as given, `Resource` the function's ARN, and the conditions the
+  request asks for: `ArnLike` `AWS:SourceArn`, `StringEquals`
+  `AWS:SourceAccount`, `aws:PrincipalOrgID`, `lambda:FunctionUrlAuthType`
+  and `lambda:EventSourceToken`, and `Bool` `lambda:InvokedViaFunctionUrl`
+  `true`. A new policy is
+  `{"Version":"2012-10-17","Id":"default","Statement":[...]}`; a statement
+  is appended to a policy `PutResourcePolicy` stored. A `StatementId`
+  already in the policy is `409` `ResourceConflictException`.
+- **RemovePermission** removes the statement with that `Sid`, `404`
+  `ResourceNotFoundException` when there is none; removing the last leaves
+  the function without a policy.
+- **PutResourcePolicy** stores a whole document, as given, and replaces
+  the policy `AddPermission` built; **DeleteResourcePolicy** deletes it.
+  Their `ResourceArn` is a complete function ARN, held to the model's
+  pattern and 256 characters (`ValidationException`); one of another
+  account or region is `404`.
+- **GetPolicy** and **GetResourcePolicy** return the document and its
+  `RevisionId`, `404` `ResourceNotFoundException` when the function has
+  none.
+
+Every change is refused when the resulting policy is over 20 KB (20480
+bytes; "Function resource-based policy: 20 KB", Lambda quotas), `400`
+`PolicyLengthExceededException`, or does not parse as a resource-based
+policy with tule.dev/policy's `ParseResource`, `400`
+`InvalidParameterValueException` (a `Principal` `AddPermission` cannot
+turn into one is refused that way too). Each change gives the policy a new
+`RevisionId`, a UUID; a `RevisionId` in the request that is not the
+current one is `412` `PreconditionFailedException`. The policy's revision
+is its own: changing the policy leaves the function's `RevisionId` as it
+was. Only `$LATEST` exists, and "Lambda does not support adding policies
+to version $LATEST" (the AddPermission API reference): `AddPermission` and
+`PutResourcePolicy` on `$LATEST` are `400` `InvalidParameterValueException`,
+and the other operations find no policy there. Another qualifier names no
+function.
+
+**How it is evaluated.** The function policy is evaluated with the
+caller's identity policies on the actions Lambda lists as supporting
+resource-based policies ("Working with resource-based policies in Lambda")
+among those served here: `lambda:InvokeFunction`, `lambda:GetFunction`,
+`lambda:GetFunctionConfiguration`, `lambda:DeleteFunction`,
+`lambda:UpdateFunctionCode`, `lambda:GetPolicy`, `lambda:ListTags`,
+`lambda:TagResource` and `lambda:UntagResource` on the function. On every
+other action, such as `lambda:UpdateFunctionConfiguration`,
+`lambda:AddPermission` or `lambda:GetResourcePolicy`, neither its `Allow`
+nor its `Deny` statements apply. The function's account is the service's,
+`TULE_Functions_AccountID`, and tule.dev/policy decides as the IAM User
+Guide's evaluation logic does:
+
+- **Within the account**, an `Allow` in either kind allows unless a `Deny`
+  in either applies. A function policy that names the caller directly (its
+  user ARN, its role's ARN, path included, its session ARN, or `"*"`)
+  allows it with no identity policy at all. One that names only the
+  account (the account ID, or `arn:aws:iam::<account>:root`) delegates to
+  the account's own policies, so the caller still needs an identity
+  `Allow`.
+- **Across accounts**, the caller needs both: an identity `Allow` in its
+  own account and an `Allow` in the function policy, whether it names the
+  account or the principal. Without the second the message ends "because no
+  resource-based policy allows the \<action\> action". Operations that act
+  on no function (`ListFunctions`, the mapping operations, the retrieval
+  API) have no function policy, so a principal of another account is
+  denied them.
+- **A role session whose role was deleted** is denied everything:
+  nothing that names the role matches it, and `aws:PrincipalArn` is never
+  derived from its session ARN.
+
+A stored policy that does not parse fails the request, `500`
+`ServiceException`, rather than be evaluated without it.
 
 ## How functions run
 
@@ -687,11 +783,11 @@ curl -fsS --aws-sigv4 aws:amz:us-east-1:lambda --user test:test \
 
 ## Differences from AWS
 
-- **Identity policies only.** Keys identity issued are held to their
-  identity policies; resource-based policies, permissions boundaries,
-  session policies and SCPs are not part of evaluation, and functions has
-  no function policies to store. Every accepted key works on the same
-  functions. `Role` is checked against the model's pattern, passed with
+- **Identity and function policies only.** Keys identity issued are held
+  to their identity policies and the function policy; permissions
+  boundaries, session policies, SCPs and RCPs are not part of evaluation,
+  so a grant to a role ARN is not limited by them. Every accepted key
+  works on the same functions. `Role` is checked against the model's pattern, passed with
   `iam:PassRole`, and assumed with the functions' role credentials
   ([Execution roles](#execution-roles)); with any other credentials it is
   recorded and never assumed, and whether a role of that ARN exists is not
@@ -707,18 +803,40 @@ curl -fsS --aws-sigv4 aws:amz:us-east-1:lambda --user test:test \
   them, and a request of an evaluated principal on a resource that holds
   such keys fails with `500` `ServiceException` rather than be evaluated.
   Lambda documents no answer for these requests; these are the service's.
-- **Some condition keys are not supplied.** `aws:PrincipalArn` of a role
-  session is its role's ARN without the role's path, which AWS includes:
-  the session's ARN carries no path and identity does not send it yet. **A
-  policy condition on a role ARN that includes a path does not match a
-  session**, so a `Deny` written that way, such as one on
-  `arn:aws:iam::*:role/restricted/*`, does not apply to sessions yet; write
-  it on the path-less role ARN until identity sends the path. `aws:userid` (the principal's
-  unique ID) and `aws:PrincipalTag/<key>` are not supplied, since identity
-  does not send them; nor are `lambda:Layer`, `lambda:VpcIds`,
-  `lambda:SubnetIds`, `lambda:SecurityGroupIds` and
+- **Some condition keys are not supplied.** `aws:PrincipalOrgID` and
+  `aws:PrincipalOrgPaths` are not supplied, since identity does not carry
+  the organization: a positive condition on them never holds, so an
+  `AddPermission` with `PrincipalOrgID` grants nothing, and a negated one
+  (`StringNotEquals` and the like) always does, so **a `Deny` written with a
+  negated operator on `aws:PrincipalOrgID` denies every evaluated
+  principal**. `aws:SourceArn` and `aws:SourceAccount` are not supplied
+  either, since no AWS service calls a function here, so a statement
+  conditioned on them never applies. Nor are `lambda:Layer`,
+  `lambda:VpcIds`, `lambda:SubnetIds`, `lambda:SecurityGroupIds` and
   `lambda:CodeSigningConfigArn`, for features the service does not have,
-  and `lambda:EventSourceToken` and `lambda:InvokedViaFunctionUrl`.
+  and `lambda:EventSourceToken` and `lambda:InvokedViaFunctionUrl`, since
+  there are no Alexa event sources or function URLs. `lambda:Principal` is
+  supplied on `AddPermission` only, not on `PutResourcePolicy` or
+  `DeleteResourcePolicy`, whose principals the reference does not say how
+  to give.
+- **Function policies name principals by ARN.** AWS turns a user or role
+  ARN in a stored resource-based policy into the principal's unique ID, so
+  a principal deleted and created again under the same name does not
+  inherit the grant. Here matching is by ARN, so a recreated user or role
+  does inherit it, until identity can resolve unique IDs for the services.
+  A session whose role was deleted is the exception: it is denied.
+- **Service principals never match.** No AWS service calls a function
+  here, so a `Service` principal, such as one `AddPermission` writes for
+  `sns.amazonaws.com`, matches no caller.
+- **Public function policies are not blocked.** Lambda refuses a policy
+  that would grant public access with `PublicPolicyException` under its
+  public access settings, which are not served; here such a policy is
+  stored.
+- **Some policy messages are the service's.** AWS documents no message for
+  a duplicate `StatementId`, an unknown statement, a function with no
+  policy, a principal `AddPermission` cannot use, a policy over the limit
+  or `$LATEST`; the service's are in Lambda's form, and checking them
+  against Lambda is open.
 - **A function's role session is refreshed by replacing its container.**
   Lambda's runtime keeps an execution environment's credentials valid;
   here a container keeps the session it started with, and is replaced
@@ -839,8 +957,30 @@ siblings `../identity` and `../queues` by default, or the directories
 `TULE_E2E_IDENTITY_DIR` and `TULE_E2E_QUEUES_DIR` name. The execution role
 tests also run a real object-store, at `../object-store` or
 `TULE_E2E_OBJECT_STORE_DIR`, which holds the role sessions to their
-policies. CI checks out `tulehq/identity` v0.4.0, `tulehq/queues` v0.2.0
-and `tulehq/object-store` v0.6.0 and sets them.
+policies, and the cross-account tests a real accounts service, at
+`../accounts` or `TULE_E2E_ACCOUNTS_DIR`, for a member account whose
+principals call in. CI checks out `tulehq/identity` v0.4.0,
+`tulehq/accounts` v0.3.0, `tulehq/queues` v0.2.0 and `tulehq/object-store`
+v0.6.0 and sets them.
+
+## Upgrading from v0.2
+
+- **identity v0.4.0 or later is required.** The service asks identity for
+  signing-key version 3, the principal's attributes (its `aws:PrincipalArn`
+  with the role's path, `aws:userid`, type and tags); identity v0.3.1 does
+  not serve it, and its keys are refused with `500` `ServiceException`.
+- **Principals of other accounts are no longer refused outright.** v0.2
+  denied them every operation; now one is allowed what its identity policies
+  allow on a function whose policy grants it or its account, and still
+  denied everything else.
+- **`aws:PrincipalArn` of a role session includes the role's path**, as on
+  AWS, so a condition written on the path-less role ARN of a role with a
+  path, as v0.2's README advised, no longer matches; write it with the
+  path. `aws:userid` and `aws:PrincipalTag/<key>` are now supplied, so a
+  condition on them that never held now can.
+- **A function policy now decides** for the actions it governs, so a
+  function given one with `AddPermission` or `PutResourcePolicy` grants or
+  denies beside the identity policies.
 
 ## Upgrading from v0.1
 
