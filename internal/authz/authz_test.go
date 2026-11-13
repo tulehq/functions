@@ -536,3 +536,52 @@ func TestRootAndTypeMustAgree(t *testing.T) {
 		}
 	}
 }
+
+// TestADenyOnlyPolicyDeniesButNeverGrants checks a request on an action the
+// resource policy cannot grant: its Deny applies, and its Allow is dropped,
+// so the request is decided by the identity policies within the account and
+// denied across accounts.
+func TestADenyOnlyPolicyDeniesButNeverGrants(t *testing.T) {
+	a := New("123456789012", "us-east-1", time.Now)
+	const update = "lambda:UpdateFunctionConfiguration"
+	other := session("999999999999", allow("*", "*"))
+	for name, tt := range map[string]struct {
+		policy string
+		p      sigv4.Principal
+		why    policy.Reason
+	}{
+		"same account, granted by name only": {
+			p: user(), policy: grant("Allow", `{"AWS":"`+userARN+`"}`, update),
+			why: policy.NoIdentityAllow,
+		},
+		"same account, identity allow": {
+			p: user(allow(update, "*")), policy: grant("Allow", `{"AWS":"`+userARN+`"}`, update),
+		},
+		"same account, resource deny": {
+			p: user(allow("*", "*")), policy: grant("Deny", `"*"`, update),
+			why: policy.ResourceDeny,
+		},
+		"another account, granted": {
+			p: other, policy: grant("Allow", `{"AWS":"999999999999"}`, update),
+			why: policy.NoResourceAllow,
+		},
+		"another account, resource deny": {
+			p: other, policy: grant("Deny", `{"AWS":"999999999999"}`, update),
+			why: policy.ResourceDeny,
+		},
+	} {
+		err := a.Authorize(signed(tt.p), reqs(Request{
+			Action: update, Resource: fnARN, Policy: tt.policy, DenyOnly: true,
+		}))
+		if tt.why == policy.NoReason {
+			if err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+			continue
+		}
+		var d *Denied
+		if !errors.As(err, &d) || d.Why != tt.why {
+			t.Errorf("%s: got %v, want %s", name, err, tt.why)
+		}
+	}
+}

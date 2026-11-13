@@ -158,12 +158,12 @@ func (m *Module) storedFunction(ctx gas.Context, name string) (stored, error) {
 	return stored{tags: fn.Tags, policy: fn.Policy}, nil
 }
 
-// withPolicy is req, on a function, with the function's policy when req's
-// action is one the policy governs.
+// withPolicy is req, on a function, with the function's policy: its Deny
+// statements apply to every action on the function, and its Allow
+// statements only to the actions it grants (policyActions).
 func withPolicy(req authz.Request, policy string) authz.Request {
-	if policyActions[req.Action] {
-		req.Policy = policy
-	}
+	req.Policy = policy
+	req.DenyOnly = !policyActions[req.Action]
 	return req
 }
 

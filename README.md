@@ -436,15 +436,22 @@ and the other operations find no policy there. Another qualifier names no
 function.
 
 **How it is evaluated.** The function policy is evaluated with the
-caller's identity policies on the actions Lambda lists as supporting
-resource-based policies ("Working with resource-based policies in Lambda")
-among those served here: `lambda:InvokeFunction`, `lambda:GetFunction`,
+caller's identity policies on every action on the function. **Its `Deny`
+statements apply to all of them**; its `Allow` statements grant only the
+actions Lambda lists as supporting resource-based policies ("Working with
+resource-based policies in Lambda") among those served here:
+`lambda:InvokeFunction`, `lambda:GetFunction`,
 `lambda:GetFunctionConfiguration`, `lambda:DeleteFunction`,
 `lambda:UpdateFunctionCode`, `lambda:GetPolicy`, `lambda:ListTags`,
-`lambda:TagResource` and `lambda:UntagResource` on the function. On every
-other action, such as `lambda:UpdateFunctionConfiguration`,
-`lambda:AddPermission` or `lambda:GetResourcePolicy`, neither its `Allow`
-nor its `Deny` statements apply. The function's account is the service's,
+`lambda:TagResource` and `lambda:UntagResource`. On any other action on the
+function, such as `lambda:UpdateFunctionConfiguration`,
+`lambda:AddPermission` or `lambda:GetResourcePolicy`, an `Allow` in the
+function policy is not honored: the request is decided by the identity
+policies within the account, and across accounts it is denied "because no
+resource-based policy allows the \<action\> action". AWS does not say how
+it treats a statement on an action the list leaves out; ignoring a `Deny`
+the owner wrote would fail open, and refusing a grant the list does not
+name fails closed, so that is the choice made here. The function's account is the service's,
 `TULE_Functions_AccountID`, and tule.dev/policy decides as the IAM User
 Guide's evaluation logic does:
 
@@ -978,7 +985,8 @@ v0.6.0 and sets them.
   path, as v0.2's README advised, no longer matches; write it with the
   path. `aws:userid` and `aws:PrincipalTag/<key>` are now supplied, so a
   condition on them that never held now can.
-- **A function policy now decides** for the actions it governs, so a
+- **A function policy now decides**: its `Deny` statements on every action
+  on the function, its `Allow` statements on the actions it can grant, so a
   function given one with `AddPermission` or `PutResourcePolicy` grants or
   denies beside the identity policies.
 

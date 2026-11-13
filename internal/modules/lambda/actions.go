@@ -76,13 +76,14 @@ var operations = map[string]operation{
 	"DeleteEventSourceMapping":    {"lambda:DeleteEventSourceMapping", onMapping},
 }
 
-// policyActions are the actions a function's resource-based policy
-// governs: those of the operations served here among the Lambda Developer
+// policyActions are the actions a function's resource-based policy can
+// grant: those of the operations served here among the Lambda Developer
 // Guide's "Supported API actions" for resource-based policies ("Working with
-// resource-based policies in Lambda"). Every other action, such as
-// lambda:UpdateFunctionConfiguration or lambda:AddPermission, is evaluated
-// without the function's policy, so neither its Allow nor its Deny
-// statements apply to it.
+// resource-based policies in Lambda"). On every other action on the
+// function, such as lambda:UpdateFunctionConfiguration or
+// lambda:AddPermission, the policy's Deny statements still apply, and its
+// Allow statements do not: a Deny the owner wrote is never ignored, and a
+// grant the documentation does not list is not honored.
 var policyActions = map[string]bool{
 	"lambda:DeleteFunction":           true,
 	"lambda:GetFunction":              true,
