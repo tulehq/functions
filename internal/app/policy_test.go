@@ -191,8 +191,8 @@ func TestAFunctionPolicyGrantsAndDenies(t *testing.T) {
 	requireDenied(t, err, "lambda:GetFunction",
 		"arn:aws:lambda:us-east-1:000000000000:function:other")
 
-	// The policy governs only the actions Lambda's resource-based policies
-	// support: a grant of UpdateFunctionConfiguration is not evaluated.
+	// The policy grants only the actions Lambda's resource-based policies
+	// support: a grant of UpdateFunctionConfiguration is not honored.
 	in := addPermission("config", userARN)
 	in.Action = aws.String("lambda:UpdateFunctionConfiguration")
 	if _, err = root.AddPermission(ctx, in); err != nil {
@@ -322,5 +322,64 @@ func TestPutResourcePolicyIsRefusedAsLambdaRefusesIt(t *testing.T) {
 		if !errors.As(err, &apiErr) || apiErr.ErrorCode() != tt.code {
 			t.Errorf("%s: got %v, want %s", what, err, tt.code)
 		}
+	}
+}
+
+// TestADenyInTheFunctionPolicyAppliesToEveryAction checks a Deny on an
+// action the function policy cannot grant: it still beats the identity
+// policies' Allow.
+func TestADenyInTheFunctionPolicyAppliesToEveryAction(t *testing.T) {
+	all := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`
+	t.Setenv("TULE_Auth_IdentityEndpoint", fakeIdentity(t, all).URL)
+	root, srv := startApp(t)
+	ctx := t.Context()
+	createActiveOrFailed(t, root, "fn")
+	if _, err := root.PutResourcePolicy(ctx, &lambda.PutResourcePolicyInput{
+		ResourceArn: aws.String(fnARN),
+		Policy: aws.String(`{"Version":"2012-10-17","Statement":{"Effect":"Deny",` +
+			`"Principal":"*","Action":"lambda:UpdateFunctionConfiguration",` +
+			`"Resource":"` + fnARN + `"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := userClient(srv).UpdateFunctionConfiguration(ctx,
+		&lambda.UpdateFunctionConfigurationInput{
+			FunctionName: aws.String("fn"), Timeout: aws.Int32(9),
+		})
+	var apiErr smithy.APIError
+	want := "User: " + userARN + " is not authorized to perform: " +
+		"lambda:UpdateFunctionConfiguration on resource: " + fnARN +
+		" with an explicit deny in a resource-based policy"
+	if !errors.As(err, &apiErr) || apiErr.ErrorMessage() != want {
+		t.Fatalf("got %v\nwant %s", err, want)
+	}
+}
+
+// TestAGrantTheFunctionPolicyCannotMakeIsNotHonored grants another
+// account UpdateFunctionConfiguration, which the Developer Guide does not
+// list among the actions resource-based policies support: it is denied as
+// if nothing granted it.
+func TestAGrantTheFunctionPolicyCannotMakeIsNotHonored(t *testing.T) {
+	const member = "arn:aws:sts::111111111111:assumed-role/Admin/s"
+	all := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`
+	t.Setenv("TULE_Auth_IdentityEndpoint", fakeIdentityAs(t, "111111111111", member, all).URL)
+	root, srv := startApp(t)
+	ctx := t.Context()
+	createActiveOrFailed(t, root, "fn")
+	in := addPermission("member", "111111111111")
+	in.Action = aws.String("lambda:UpdateFunctionConfiguration")
+	if _, err := root.AddPermission(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	_, err := userClient(srv).UpdateFunctionConfiguration(ctx,
+		&lambda.UpdateFunctionConfigurationInput{
+			FunctionName: aws.String("fn"), Timeout: aws.Int32(9),
+		})
+	var apiErr smithy.APIError
+	want := "User: " + member + " is not authorized to perform: " +
+		"lambda:UpdateFunctionConfiguration on resource: " + fnARN + " because no " +
+		"resource-based policy allows the lambda:UpdateFunctionConfiguration action"
+	if !errors.As(err, &apiErr) || apiErr.ErrorMessage() != want {
+		t.Fatalf("got %v\nwant %s", err, want)
 	}
 }

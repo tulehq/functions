@@ -5,7 +5,8 @@ package lambda
 // PutResourcePolicy and DeleteResourcePolicy replace and delete whole, and
 // GetPolicy and GetResourcePolicy return. Each operation's request and
 // answer are the Lambda API Reference's. The policy is evaluated with the
-// identity policies of the caller on the actions it governs (policyActions).
+// identity policies of the caller on every action on the function, its
+// Allow statements only on the actions it can grant (policyActions).
 
 import (
 	"bytes"
@@ -399,7 +400,8 @@ func (m *Module) policyFunction(ctx gas.Context) (string, bool, error) {
 
 // authorizeActions authorizes op on the function name at resource, and the
 // further actions also on it, each with the function's tags and the keys
-// k, and with the function's policy for the actions it governs.
+// k, and with the function's policy: its Deny statements on every action,
+// its Allow statements on the actions it can grant.
 func (m *Module) authorizeActions(
 	ctx gas.Context,
 	op, name, resource string,

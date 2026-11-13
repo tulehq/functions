@@ -29,12 +29,15 @@ import (
 // Request is one action on one resource that a request needs allowed, with
 // the condition keys the operation supplies beside the global ones, and the
 // resource's resource-based policy document as stored, empty when it has
-// none or the action is not one the policy governs.
+// none. DenyOnly is an action the policy's Allow statements do not grant:
+// its Deny statements still apply, and the request is otherwise decided as
+// if the resource had no policy.
 type Request struct {
 	Context  map[string][]string
 	Action   string
 	Resource string
 	Policy   string
+	DenyOnly bool
 }
 
 // Denied is a denied request. Its message is AWS's: "User: <arn> is not
@@ -193,13 +196,19 @@ func (a *Authorizer) evaluate(
 			return err
 		}
 	}
-	az := policy.Authorize(policy.AuthorizeRequest{
+	ar := policy.AuthorizeRequest{
 		Action:          req.Action,
 		Resource:        req.Resource,
 		ResourceAccount: a.account,
 		Caller:          caller,
 		Context:         keys,
-	}, resource, policies...)
+	}
+	az := policy.Authorize(ar, resource, policies...)
+	// A Deny applies whatever the action; an Allow of a policy that does not
+	// grant the action is dropped by deciding again without the policy.
+	if req.DenyOnly && resource != nil && az.Decision != policy.ExplicitDeny {
+		az = policy.Authorize(ar, nil, policies...)
+	}
 	if az.Decision != policy.Allow {
 		return &Denied{
 			Principal: caller.ARN, Action: req.Action, Resource: req.Resource, Why: az.Reason,

@@ -181,6 +181,13 @@ func TestAnotherAccountNeedsBothPolicies(t *testing.T) {
 			&lambda.GetFunctionInput{FunctionName: aws.String("guarded")})
 		requireNoErr(t, err, "an action the deny does not name")
 	})
+	t.Run("a grant of an action the policy cannot grant is not honored", func(t *testing.T) {
+		const update = "lambda:UpdateFunctionConfiguration"
+		requireResourceDenied(t, errOf(delegate.UpdateFunctionConfiguration(t.Context(),
+			&lambda.UpdateFunctionConfigurationInput{
+				FunctionName: aws.String("guarded"), Timeout: aws.Int32(9),
+			})), delegateARN, update, functionARN("guarded"), noResourceAllow+update+" action")
+	})
 }
 
 func TestAFunctionPolicyWithinTheAccount(t *testing.T) {
@@ -218,6 +225,17 @@ func TestAFunctionPolicyWithinTheAccount(t *testing.T) {
 			userARN("denied")+`"},"Action":"`+get+`","Resource":"`+functionARN("fn")+`"}`)
 		requireResourceDenied(t, getConfigErr(t, c, "fn"), userARN("denied"), get,
 			functionARN("fn"), resourceDeny)
+	})
+	t.Run("a deny applies to an action the policy cannot grant", func(t *testing.T) {
+		const update = "lambda:UpdateFunctionConfiguration"
+		c := s.policyUser(t, "configdenied", allowDoc(`"lambda:*"`, `"*"`))
+		putFunctionPolicy(t, root, "fn", `{"Effect":"Deny","Principal":{"AWS":"`+
+			userARN("configdenied")+`"},"Action":"`+update+`","Resource":"`+
+			functionARN("fn")+`"}`)
+		requireResourceDenied(t, errOf(c.UpdateFunctionConfiguration(t.Context(),
+			&lambda.UpdateFunctionConfigurationInput{
+				FunctionName: aws.String("fn"), Timeout: aws.Int32(9),
+			})), userARN("configdenied"), update, functionARN("fn"), resourceDeny)
 	})
 	t.Run("the root key is never evaluated", func(t *testing.T) {
 		putFunctionPolicy(t, root, "fn", `{"Effect":"Deny","Principal":"*","Action":"*",`+
