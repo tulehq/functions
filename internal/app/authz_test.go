@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/smithy-go"
 	"tule.dev/identity/keysource"
+	"tule.dev/identity/principals"
 	"tule.dev/identity/servicerole"
 	"tule.dev/sigv4"
 )
@@ -45,10 +46,26 @@ func fakeIdentity(t *testing.T, policies ...string) *httptest.Server {
 // below set role mode themselves.
 func fakeIdentityAs(t *testing.T, account, arn string, policies ...string) *httptest.Server {
 	t.Helper()
+	return fakeIdentityWith(t, directoryOf(principalOf(account, arn)), account, arn, policies...)
+}
+
+// fakeIdentityWith is fakeIdentityAs whose principal-ID endpoint resolves
+// the users and roles of dir.
+func fakeIdentityWith(
+	t *testing.T,
+	dir *directory,
+	account, arn string,
+	policies ...string,
+) *httptest.Server {
+	t.Helper()
 	t.Setenv("TULE_Functions_FunctionCredentials", "root")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == servicerole.Path {
+		switch r.URL.Path {
+		case servicerole.Path:
 			assumeRole(w, r)
+			return
+		case principals.Path:
+			dir.serve(w, r)
 			return
 		}
 		var req keysource.Request

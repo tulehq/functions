@@ -169,8 +169,9 @@ func (a *Authorizer) Authorize(r *http.Request, build func() ([]Request, error))
 	}
 	global := GlobalKeys(r, &p, a.region, a.now())
 	caller := CallerOf(&p)
+	unknown := UnknownKeys(&p)
 	for _, req := range reqs {
-		if err = a.evaluate(&req, global, caller, policies); err != nil {
+		if err = a.evaluate(&req, global, unknown, caller, policies); err != nil {
 			return err
 		}
 	}
@@ -178,10 +179,11 @@ func (a *Authorizer) Authorize(r *http.Request, build func() ([]Request, error))
 }
 
 // evaluate authorizes req of caller, whose identity policies are policies,
-// with the global keys global.
+// with the global keys global and the keys unknown marked unknown.
 func (a *Authorizer) evaluate(
 	req *Request,
 	global map[string][]string,
+	unknown []string,
 	caller policy.Caller,
 	policies []*policy.Policy,
 ) error {
@@ -202,6 +204,7 @@ func (a *Authorizer) evaluate(
 		ResourceAccount: a.account,
 		Caller:          caller,
 		Context:         keys,
+		Unknown:         unknown,
 	}
 	az := policy.Authorize(ar, resource, policies...)
 	// A Deny applies whatever the action; an Allow of a policy that does not
@@ -218,7 +221,7 @@ func (a *Authorizer) evaluate(
 }
 
 // CallerOf is the policy library's description of p, from the principal
-// attributes identity's signing-key endpoint gives at version 3. It supplies
+// attributes identity's signing-key endpoint gives at version 3 and later. It supplies
 // aws:PrincipalArn (the role's ARN with its path for a session, none for a
 // session whose role was deleted), aws:PrincipalAccount, aws:userid,
 // aws:PrincipalType and, for an IAM user, aws:username, and matches p
@@ -319,8 +322,10 @@ func checkSize(keys map[string][]string) error {
 
 // GlobalKeys are the global condition keys the service supplies for every
 // request of p: aws:SourceIp, aws:CurrentTime, aws:EpochTime,
-// aws:SecureTransport, aws:RequestedRegion and aws:PrincipalTag/<key> for
-// each of p's tags. The principal's own keys (aws:PrincipalArn,
+// aws:SecureTransport, aws:RequestedRegion, aws:PrincipalTag/<key> for
+// each of p's tags, and, for a principal whose account is in an
+// organization, aws:PrincipalOrgID and aws:PrincipalOrgPaths, which identity
+// reports at version 4 of its signing-key endpoint. The principal's own keys (aws:PrincipalArn,
 // aws:PrincipalAccount, aws:userid, aws:PrincipalType, aws:username) come
 // from CallerOf, through tule.dev/policy's Authorize.
 //
@@ -346,5 +351,27 @@ func GlobalKeys(
 	for k, v := range p.Tags {
 		keys["aws:PrincipalTag/"+k] = []string{v}
 	}
+	if p.OrgID != "" {
+		keys[keyPrincipalOrgID] = []string{p.OrgID}
+		keys[keyPrincipalOrgPaths] = p.OrgPaths
+	}
 	return keys
+}
+
+// The organization keys.
+const (
+	keyPrincipalOrgID    = "aws:PrincipalOrgID"
+	keyPrincipalOrgPaths = "aws:PrincipalOrgPaths"
+)
+
+// UnknownKeys are the condition keys of p whose values its key source could
+// not tell, which are evaluated as unknown rather than absent: the
+// organization keys when p.OrgUnknown is set, since an absent key satisfies
+// a negated operator and would grant, or let a Deny lapse, for a principal
+// whose organization is not known. Nil otherwise.
+func UnknownKeys(p *sigv4.Principal) []string {
+	if p.OrgUnknown {
+		return []string{keyPrincipalOrgID, keyPrincipalOrgPaths}
+	}
+	return nil
 }

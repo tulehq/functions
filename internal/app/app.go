@@ -13,6 +13,7 @@ import (
 	"github.com/gasmod/gas"
 	"github.com/gasmod/gas/database"
 	"github.com/gasmod/gas/migrate"
+	"tule.dev/identity/principals"
 	"tule.dev/identity/servicerole"
 	"tule.dev/sigv4"
 
@@ -56,9 +57,13 @@ func New(cfg *Config, extra ...gas.Option) (*gas.App, error) {
 	if rErr != nil {
 		return nil, rErr
 	}
+	bound, pErr := newPrincipals(cfg)
+	if pErr != nil {
+		return nil, pErr
+	}
 	registerInfraServices(app, cfg, logger)
 	registerAppServices(app, cfg, roles)
-	registerAppModules(app, cfg)
+	registerAppModules(app, cfg, bound)
 
 	// The engine starts once the store's schema is applied, which gas does
 	// after every service's Init.
@@ -120,6 +125,26 @@ func newRoles(cfg *Config) (*servicerole.Client, error) {
 	return c, nil
 }
 
+// newPrincipals returns the client function policies are bound and shown
+// through, identity's principal-ID endpoint, signed with the root key, when
+// an identity endpoint is configured, and nil to run standalone, where
+// policies are stored as sent and matched by ARN.
+func newPrincipals(cfg *Config) (lambda.Principals, error) {
+	if cfg.Auth.IdentityEndpoint == "" {
+		return nil, nil
+	}
+	c, err := principals.New(principals.Config{
+		HTTPClient:      &http.Client{Timeout: identityTimeout},
+		Endpoint:        cfg.Auth.IdentityEndpoint,
+		AccessKeyID:     cfg.Auth.AccessKeyID,
+		SecretAccessKey: cfg.Auth.SecretAccessKey,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to build the principal-ID client: %w", err)
+	}
+	return c, nil
+}
+
 func registerInfraServices(app *gas.App, cfg *Config, logger gas.Logger) {
 	app.RegisterServiceInstance[gas.ConfigProvider](cfg.store)
 	app.RegisterServiceInstance[gas.Logger](logger)
@@ -160,8 +185,8 @@ func registerAppServices(app *gas.App, cfg *Config, roles *servicerole.Client) {
 		engine.New(cfg.Functions, cfg.Auth.AccessKeyID, cfg.Auth.SecretAccessKey, roles))
 }
 
-func registerAppModules(app *gas.App, cfg *Config) {
-	app.RegisterSingletonService[*lambda.Module](lambda.NewModule(cfg.Functions))
+func registerAppModules(app *gas.App, cfg *Config, bound lambda.Principals) {
+	app.RegisterSingletonService[*lambda.Module](lambda.NewModule(cfg.Functions, bound))
 	app.RegisterSingletonService[*history.Module](history.NewModule(cfg.Functions))
 	app.RegisterSingletonService[*health.Module](health.NewModule)
 }

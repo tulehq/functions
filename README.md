@@ -341,10 +341,19 @@ the region a request is signed for: any signed region verifies, and the
 request acts in the service's region, as an AWS endpoint fixes it),
 `aws:PrincipalTag/<key>` from the tags of the IAM user or of the session's
 role (identity issues no session tags), and, from the principal attributes
-identity sends (signing-key version 3), `aws:PrincipalAccount`,
+identity sends (signing-key version 3 and later), `aws:PrincipalAccount`,
 `aws:PrincipalArn` (for a role session, its role's ARN with the role's
 path), `aws:userid`, `aws:PrincipalType` and, for an IAM user,
-`aws:username`; and the Lambda keys the reference lists:
+`aws:username`; `aws:PrincipalOrgID` and `aws:PrincipalOrgPaths` (one
+path, `o-.../r-.../ou-.../`, since an account has one parent) for a
+principal whose account is an active member, or the management account, of
+the organization identity's accounts service reports, from signing-key
+version 4 (identity keeps them for 30 seconds, so an account moved or
+removed keeps its old keys for at most that long), and neither for any
+other principal, as AWS leaves them out; when identity could not ask the
+accounts service, both are evaluated as unknown, with tule.dev/policy's
+unknown keys, so a condition on them never helps an `Allow`, a negated one
+included, and always lets a `Deny` apply; and the Lambda keys the reference lists:
 `aws:ResourceTag/<key>` from the tags of the function or mapping acted on,
 `aws:RequestTag/<key>` and `aws:TagKeys` from the tags `CreateFunction`,
 `TagResource` and `CreateEventSourceMapping` set (`aws:TagKeys` from
@@ -424,6 +433,51 @@ which the Lambda API keeps and this service evaluates:
 - **GetPolicy** and **GetResourcePolicy** return the document and its
   `RevisionId`, `404` `ResourceNotFoundException` when the function has
   none.
+
+**Principals are stored by unique ID.** With an identity endpoint, a
+policy is saved as AWS saves one: each IAM user or role ARN in its
+`Principal` and `NotPrincipal` elements is replaced by that user's or
+role's unique ID (`AIDA...`, `AROA...`), through identity's principal-ID
+endpoint, before it is stored, and the stored document is what is
+evaluated. "If you delete the role, then you break the relationship. ...
+The new role has a new principal ID that does not match the ID stored in
+the trust policy" (the IAM User Guide, Principal element), and the same
+holds here: a user or role deleted and created again under the same name
+is not granted what the old one was. Account IDs, `:root` ARNs, `"*"`,
+assumed-role session ARNs, service principals and ARNs in conditions, such
+as `aws:PrincipalArn`, are kept as written. Every read of the policy
+(`GetPolicy`, `GetResourcePolicy` and the policy `PutResourcePolicy`
+answers with) shows it back: a unique ID that a user or role still has is
+its current ARN, and one that none has stays the ID, as AWS shows it. The
+document is otherwise kept as written, its statements and members in their
+order; where an ID replaced an ARN, the white space of that object is not.
+`AddPermission` binds the statement it adds, and leaves the policy's other
+statements as they are stored; it answers with the statement as written.
+
+A user or role ARN that no user or role has is refused, and nothing is
+stored: `AddPermission` and `PutResourcePolicy` both answer `400`
+`InvalidParameterValueException`, "The provided principal was invalid.
+Please check the principal and try again." The Lambda API Reference
+documents no message for either; this one is the message reported for an
+`AddPermission` whose principal is invalid or was deleted (AWS re:Post,
+"lambda functional url permission", and community reports of a deleted
+role), so it is a secondary source, and `PutResourcePolicy` gives the same
+one so both writes answer alike. A write is authorized before its policy
+is bound, so a caller denied the operation causes no call to identity's
+principal-ID endpoint. The bound policy is held to the 20 KB
+limit too, as it is stored. When identity cannot be asked, a write that
+names a user or role fails with `500` `ServiceException`, logged, and
+stores nothing, and a read of a policy holding a unique ID fails the same
+way; evaluation never asks identity for this. A read releases the
+function's hold before it asks identity to show the policy, so a slow
+identity delays only that read (and only the answer of a
+`PutResourcePolicy`, whose policy is then already stored: a failure to show
+it fails the call although the policy is stored). Binding is part of the
+write, between its authorization and the change, so `AddPermission` and
+`PutResourcePolicy` hold the function while they wait for identity, and
+**an identity that does not answer stalls the operations on that function,
+`Invoke` included**, for up to the 10 seconds the service waits for it. Standalone, with no identity endpoint, nothing is
+bound: policies are stored as sent and matched by ARN.
 
 Every change is refused when the resulting policy is over 20 KB (20480
 bytes; "Function resource-based policy: 20 KB", Lambda quotas), `400`
@@ -840,14 +894,8 @@ curl -fsS --aws-sigv4 aws:amz:us-east-1:lambda --user test:test \
   them, and a request of an evaluated principal on a resource that holds
   such keys fails with `500` `ServiceException` rather than be evaluated.
   Lambda documents no answer for these requests; these are the service's.
-- **Some condition keys are not supplied.** `aws:PrincipalOrgID` and
-  `aws:PrincipalOrgPaths` are not supplied, since identity does not carry
-  the organization: a positive condition on them never holds, so an
-  `AddPermission` with `PrincipalOrgID` grants nothing, and a negated one
-  (`StringNotEquals` and the like) always does, so **a `Deny` written with a
-  negated operator on `aws:PrincipalOrgID` denies every evaluated
-  principal**. `aws:SourceArn` and `aws:SourceAccount` are not supplied
-  either, since no AWS service calls a function here, so a statement
+- **Some condition keys are not supplied.** `aws:SourceArn` and
+  `aws:SourceAccount` are not supplied, since no AWS service calls a function here, so a statement
   conditioned on them never applies. Nor are `lambda:Layer`,
   `lambda:VpcIds`, `lambda:SubnetIds`, `lambda:SecurityGroupIds` and
   `lambda:CodeSigningConfigArn`, for features the service does not have,
@@ -856,12 +904,15 @@ curl -fsS --aws-sigv4 aws:amz:us-east-1:lambda --user test:test \
   supplied on `AddPermission` only, not on `PutResourcePolicy` or
   `DeleteResourcePolicy`, whose principals the reference does not say how
   to give.
-- **Function policies name principals by ARN.** AWS turns a user or role
-  ARN in a stored resource-based policy into the principal's unique ID, so
-  a principal deleted and created again under the same name does not
-  inherit the grant. Here matching is by ARN, so a recreated user or role
-  does inherit it, until identity can resolve unique IDs for the services.
-  A session whose role was deleted is the exception: it is denied.
+- **Some function policies name principals by ARN.** A policy is bound to
+  unique IDs only when it is saved with an identity endpoint
+  ([Function policies](#function-policies)). One stored by an earlier
+  release, or while running standalone, names its principals by ARN, and a
+  user or role deleted and created again under the same name inherits its
+  grants, until the policy is saved again with `PutResourcePolicy`; a
+  statement `AddPermission` adds is bound, and the policy's other
+  statements are not. A session whose role was deleted is denied either
+  way.
 - **Service principals never match.** No AWS service calls a function
   here, so a `Service` principal, such as one `AddPermission` writes for
   `sns.amazonaws.com`, matches no caller.
@@ -996,9 +1047,30 @@ tests also run a real object-store, at `../object-store` or
 `TULE_E2E_OBJECT_STORE_DIR`, which holds the role sessions to their
 policies, and the cross-account tests a real accounts service, at
 `../accounts` or `TULE_E2E_ACCOUNTS_DIR`, for a member account whose
-principals call in. CI checks out `tulehq/identity` v0.4.0,
-`tulehq/accounts` v0.3.0, `tulehq/queues` v0.2.0 and `tulehq/object-store`
-v0.6.0 and sets them.
+principals call in. CI checks out `tulehq/identity` v0.5.0,
+`tulehq/accounts` v0.4.0, `tulehq/queues` v0.3.0 and `tulehq/object-store`
+v0.7.0 and sets them.
+
+## Upgrading from v0.3
+
+- **identity v0.5.0 or later is required.** The service asks identity for
+  signing-key version 4, with the organization keys, and binds and shows
+  function policies through its principal-ID endpoint, which identity
+  v0.4.0 does not serve: there, a policy write naming a user or role, and a
+  read of a policy holding a unique ID, fail with `500` `ServiceException`.
+- **Policies stored by earlier releases are unbound.** They name their
+  principals by ARN and are matched by ARN, so a user or role deleted and
+  created again under the same name still inherits their grants, until
+  each is saved again with `PutResourcePolicy`; nothing binds them
+  silently. Read one back with `GetPolicy` and put it again to bind it.
+- **A policy naming a user or role that does not exist is refused**, where
+  it was stored before: `AddPermission` and `PutResourcePolicy` answer
+  `400` `InvalidParameterValueException`.
+- **`aws:PrincipalOrgID` and `aws:PrincipalOrgPaths` are supplied.** An
+  `AddPermission` with `PrincipalOrgID`, which granted nothing before, now
+  grants the organization's principals, and a condition with a negated
+  operator on either key, which held for every principal before, now holds
+  only for principals outside the organization.
 
 ## Upgrading from v0.2
 

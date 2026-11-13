@@ -29,10 +29,15 @@ type Module struct {
 	authz    *authz.Authorizer
 	settings *contracts.Settings
 	names    *nameLocks
+	// principals binds function policies on save and shows them on read,
+	// nil when the service runs standalone.
+	principals Principals
 }
 
-// NewModule returns the constructor gas builds the Module with.
-func NewModule(settings *contracts.Settings) func(
+// NewModule returns the constructor gas builds the Module with. principals
+// binds the function policies' principals, nil to run standalone, where
+// policies are stored as sent.
+func NewModule(settings *contracts.Settings, principals Principals) func(
 	router *gas.Router, store contracts.Store, eng *engine.Engine, az *authz.Authorizer,
 ) *Module {
 	return func(
@@ -40,7 +45,7 @@ func NewModule(settings *contracts.Settings) func(
 	) *Module {
 		return &Module{
 			router: router, store: store, engine: eng, authz: az, settings: settings,
-			names: newNameLocks(),
+			names: newNameLocks(), principals: principals,
 		}
 	}
 }

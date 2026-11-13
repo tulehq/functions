@@ -38,25 +38,25 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: tulehq/identity
-          ref: v0.4.0
+          ref: v0.5.0
           path: identity
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: tulehq/accounts
-          ref: v0.3.0
+          ref: v0.4.0
           path: accounts
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: tulehq/queues
-          ref: v0.2.0
+          ref: v0.3.0
           path: queues
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: tulehq/object-store
-          ref: v0.6.0
+          ref: v0.7.0
           path: object-store
 
       - name: End-to-end tests

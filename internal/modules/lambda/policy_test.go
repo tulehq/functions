@@ -1,6 +1,7 @@
 package lambda
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -101,7 +102,7 @@ func TestTheStatementIsLambdas(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("%s:\n got %s\nwant %s", name, got, tt.want)
 		}
-		doc, err := withStatement("", s)
+		doc, err := withStatement("", s.Sid, raw(t, s))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -163,6 +164,16 @@ func TestAddPermissionIsHeldToTheModel(t *testing.T) {
 	}
 }
 
+// raw is the statement s as JSON.
+func raw(t *testing.T, s *permissionStatement) json.RawMessage {
+	t.Helper()
+	b, err := marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return json.RawMessage(b)
+}
+
 // statement is the statement of permission's request with the ID sid.
 func statement(t *testing.T, sid string) *permissionStatement {
 	t.Helper()
@@ -177,7 +188,7 @@ func statement(t *testing.T, sid string) *permissionStatement {
 
 func TestStatementsAreAddedAndRemovedBySid(t *testing.T) {
 	s1 := statement(t, "s-1_a")
-	doc, err := withStatement("", s1)
+	doc, err := withStatement("", s1.Sid, raw(t, s1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,10 +198,10 @@ func TestStatementsAreAddedAndRemovedBySid(t *testing.T) {
 	) {
 		t.Fatalf("new policy %s", doc)
 	}
-	_, err = withStatement(doc, s1)
+	_, err = withStatement(doc, s1.Sid, raw(t, s1))
 	requireCode(t, "the same Sid", err, lambdaapi.CodeResourceConflict)
 
-	if doc, err = withStatement(doc, statement(t, "s2")); err != nil {
+	if doc, err = withStatement(doc, "s2", raw(t, statement(t, "s2"))); err != nil {
 		t.Fatal(err)
 	}
 	if doc, err = withoutStatement(doc, "s-1_a"); err != nil {
@@ -216,7 +227,7 @@ func TestAStatementIsAddedToAPutPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc, err := withStatement(put, s)
+	doc, err := withStatement(put, s.Sid, raw(t, s))
 	if err != nil {
 		t.Fatal(err)
 	}

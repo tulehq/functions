@@ -587,3 +587,99 @@ func TestADenyOnlyPolicyDeniesButNeverGrants(t *testing.T) {
 		}
 	}
 }
+
+// The organization of the test principals.
+const (
+	orgID   = "o-a1b2c3d4e5"
+	orgPath = "o-a1b2c3d4e5/r-ab12/ou-ab12-11111111/"
+)
+
+func TestTheOrganizationKeysAreSupplied(t *testing.T) {
+	p := user()
+	p.OrgID, p.OrgPaths = orgID, []string{orgPath}
+	got := GlobalKeys(signed(p), &p, "us-east-1", now)
+	requireKeys(t, got, map[string][]string{
+		"aws:PrincipalOrgID":    {orgID},
+		"aws:PrincipalOrgPaths": {orgPath},
+	})
+	if u := UnknownKeys(&p); u != nil {
+		t.Errorf("unknown keys %v of a known organization", u)
+	}
+}
+
+func TestNoOrganizationLeavesTheKeysOut(t *testing.T) {
+	p := user()
+	got := GlobalKeys(signed(p), &p, "us-east-1", now)
+	for _, k := range []string{"aws:PrincipalOrgID", "aws:PrincipalOrgPaths"} {
+		if v, ok := got[k]; ok {
+			t.Errorf("%s = %v for a principal in no organization", k, v)
+		}
+	}
+	if u := UnknownKeys(&p); u != nil {
+		t.Errorf("unknown keys %v of a principal in no organization", u)
+	}
+}
+
+func TestAnUnknownOrganizationIsUnknown(t *testing.T) {
+	p := user()
+	p.OrgUnknown = true
+	got := UnknownKeys(&p)
+	want := []string{"aws:PrincipalOrgID", "aws:PrincipalOrgPaths"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("unknown keys %v, want %v", got, want)
+	}
+}
+
+// TestOrganizationConditionsAreDecided evaluates an Allow on
+// aws:PrincipalOrgID and on aws:PrincipalOrgPaths, and a Deny on a negated
+// aws:PrincipalOrgID, and an Allow on a negated aws:PrincipalOrgID, for a
+// member of the organization, a principal in no organization and one whose
+// organization is unknown: an unknown organization neither grants, even
+// where an absent key would, nor lets the Deny lapse.
+func TestOrganizationConditionsAreDecided(t *testing.T) {
+	const get = "lambda:GetFunction"
+	cond := func(effect, op, key, value string) string {
+		return `{"Version":"2012-10-17","Statement":{"Effect":"` + effect +
+			`","Action":"*","Resource":"*","Condition":{"` + op + `":{"` + key + `":"` +
+			value + `"}}}}`
+	}
+	byID := cond("Allow", "StringEquals", "aws:PrincipalOrgID", orgID)
+	byPath := cond("Allow", "ForAnyValue:StringLike", "aws:PrincipalOrgPaths",
+		"o-a1b2c3d4e5/r-ab12/*")
+	outside := cond("Deny", "StringNotEquals", "aws:PrincipalOrgID", orgID)
+	notOther := cond("Allow", "StringNotEquals", "aws:PrincipalOrgID", "o-zzzzzzzzzz")
+	member := func(docs ...string) sigv4.Principal {
+		p := user(docs...)
+		p.OrgID, p.OrgPaths = orgID, []string{orgPath}
+		return p
+	}
+	unknown := func(docs ...string) sigv4.Principal {
+		p := user(docs...)
+		p.OrgUnknown = true
+		return p
+	}
+	for name, tt := range map[string]struct {
+		p     sigv4.Principal
+		allow bool
+	}{
+		"a member by its organization ID":            {member(byID), true},
+		"a member by its organization path":          {member(byPath), true},
+		"no organization by ID":                      {user(byID), false},
+		"no organization by path":                    {user(byPath), false},
+		"an unknown organization by ID":              {unknown(byID), false},
+		"an unknown organization by path":            {unknown(byPath), false},
+		"a member past the negated deny":             {member(allow("*", "*"), outside), true},
+		"no organization denied":                     {user(allow("*", "*"), outside), false},
+		"an unknown organization denied":             {unknown(allow("*", "*"), outside), false},
+		"no organization by a negated allow":         {user(notOther), true},
+		"an unknown organization by a negated allow": {unknown(notOther), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := New("123456789012", "us-east-1", time.Now).Authorize(signed(tt.p),
+				reqs(Request{Action: get, Resource: fnARN}))
+			if (err == nil) != tt.allow {
+				t.Fatalf("allow %t, got %v", tt.allow, err)
+			}
+		})
+	}
+}
