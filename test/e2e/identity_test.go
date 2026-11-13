@@ -61,9 +61,12 @@ func TestIdentityIssuedKeys(t *testing.T) {
 	t.Run("a deleted key is refused", s.testDeletedKey)
 }
 
-func startIdentityStack(t *testing.T) *identityStack {
+// startIdentityStack runs identity, with the extra environment, and
+// functions pointed at it.
+func startIdentityStack(t *testing.T, extra ...string) *identityStack {
 	t.Helper()
-	identity := startService(t, "identity", identityDirEnv, identityRootKeyID, identityRootSecret)
+	identity := startService(t, "identity", identityDirEnv, identityRootKeyID, identityRootSecret,
+		extra...)
 	s := &identityStack{
 		rootCreds: aws.Credentials{
 			AccessKeyID:     identityRootKeyID,
