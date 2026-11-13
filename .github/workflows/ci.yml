@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+
+      - name: Unit tests
+        run: make test
+
+      # The end-to-end tests run functions in containers on the runner's
+      # Docker daemon, and build and run the identity and queues services
+      # from their source: identity for keys it issued, queues for the event
+      # source mappings to poll. They run against the siblings' released
+      # versions, not their main branches; move the pins when they release.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tulehq/identity
+          ref: v0.1.0
+          path: identity
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tulehq/queues
+          ref: v0.1.0
+          path: queues
+
+      - name: End-to-end tests
+        run: make test-e2e
+        env:
+          TULE_E2E_IDENTITY_DIR: ${{ github.workspace }}/identity
+          TULE_E2E_QUEUES_DIR: ${{ github.workspace }}/queues
+          # Runs the tests that build function images on AWS's base images,
+          # which pull from public.ecr.aws; they skip without it, as they do
+          # on a developer machine.
+          TULE_E2E_AWS_BASE_IMAGE: "1"
+
+  smoke:
+    # The tests run the app in-process; this runs the image as users do.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build and run the image
+        run: make smoke
+
+  publish:
+    # Only tagged releases publish, and only after the tests and the image
+    # smoke test pass.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/tulehq/functions
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ steps.meta.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

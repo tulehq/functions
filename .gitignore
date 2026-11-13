@@ -1,0 +1,19 @@
+# Build output
+/build/
+
+# Local store
+/data/
+
+# Local configuration
+.env
+.env.*
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+
+# Go test and coverage output
+*.test
+*.out
+coverage.*

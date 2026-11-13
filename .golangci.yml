@@ -1,0 +1,133 @@
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+  tests: true
+  build-tags:
+    - e2e
+
+linters:
+  enable:
+    # Bugs & correctness
+    - errcheck
+    - govet
+    - staticcheck
+    - bodyclose
+    - nilerr
+    - sqlclosecheck
+    - contextcheck
+
+    # Style & consistency
+    - revive
+    - misspell
+    - whitespace
+    - unconvert
+    - predeclared
+
+    # Complexity & maintainability
+    - gocyclo
+    - gocognit
+    - cyclop
+    - funlen
+    - nestif
+
+    # Performance
+    - prealloc
+    - gocritic
+
+    # Security
+    - gosec
+
+    # Error handling
+    - errorlint
+    - wrapcheck
+
+    # Architecture
+    - depguard
+
+    # Unused code
+    - unused
+    - unparam
+    - wastedassign
+
+  settings:
+    govet:
+      enable-all: true
+
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+
+    wrapcheck:
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - errors.Join(
+        - .Wrap(
+        - .Wrapf(
+        - .WithMessage(
+        - .WithMessagef(
+        - .WithStack(
+        - (github.com/gasmod/gas.Context).
+      # Errors crossing our own internal boundaries are already annotated where
+      # they are produced: the store wraps with fmt.Errorf, and the lambdaapi
+      # helpers return a *lambdaapi.Error that already carries its status and
+      # error type. Wrapping again at each handler would bury what the
+      # dispatcher renders.
+      ignore-package-globs:
+        - tule.dev/functions/internal/*
+
+    misspell:
+      locale: US
+
+    depguard:
+      rules:
+        internal:
+          list-mode: lax
+          files:
+            - "**/internal/**/*.go"
+          allow:
+            - tule.dev/functions/internal
+
+  exclusions:
+    paths:
+      - vendor
+      - third_party
+      - testdata
+
+    rules:
+      - path: test/
+        linters:
+          - revive
+
+      # The fixtures are deliberately fake account IDs, ARNs and the AWS
+      # documentation's example key, which G101 reads as real credentials.
+      - path: _test\.go
+        text: G101
+        linters:
+          - gosec
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+    - golines
+    - swaggo
+
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(tule.dev/functions)
+
+output:
+  sort-order:
+    - linter
+    - severity
+    - file
