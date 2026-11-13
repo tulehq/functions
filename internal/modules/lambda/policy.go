@@ -61,6 +61,7 @@ const (
 	maxStatementID      = 100
 	maxEventSourceToken = 256
 	maxResourceARN      = 256
+	minOrgID            = 12
 )
 
 // The further actions the whole-policy operations need, which the Service
@@ -257,12 +258,16 @@ func checkRequired(req *lambdaapi.AddPermissionRequest) error {
 		return constraint("statementId", "have length less than or equal to 100")
 	case len(deref(req.EventSourceToken)) > maxEventSourceToken:
 		return constraint("eventSourceToken", "have length less than or equal to 256")
+	case req.PrincipalOrgID != nil && len(*req.PrincipalOrgID) < minOrgID:
+		return constraint("principalOrgID", "have length greater than or equal to 12")
 	}
 	return nil
 }
 
 // checkAddPermission holds an AddPermission request to the model's
-// constraints.
+// constraints. Every member sent is checked, the empty string included,
+// which no pattern of these members matches: a condition member sent
+// empty is refused, never left out of the statement.
 func checkAddPermission(req *lambdaapi.AddPermissionRequest) error {
 	if err := checkRequired(req); err != nil {
 		return err
@@ -280,7 +285,7 @@ func checkAddPermission(req *lambdaapi.AddPermissionRequest) error {
 		{req.SourceAccount, sourceAccountPattern, "sourceAccount"},
 		{req.SourceArn, sourceARNPattern, "sourceArn"},
 	} {
-		if c.value != nil && *c.value != "" && !c.pattern.MatchString(*c.value) {
+		if c.value != nil && !c.pattern.MatchString(*c.value) {
 			return patternError(c.member, *c.value, c.pattern.String())
 		}
 	}
@@ -314,19 +319,26 @@ func statementOf(req *lambdaapi.AddPermissionRequest, arn string) (*permissionSt
 		Sid: *req.StatementID, Effect: "Allow", Principal: principal,
 		Action: *req.Action, Resource: arn,
 	}
-	invokedViaURL := ""
+	// InvokedViaFunctionUrl false asks for no restriction, so only true
+	// becomes a condition.
+	var invokedViaURL *string
 	if req.InvokedViaFunctionURL != nil && *req.InvokedViaFunctionURL {
-		invokedViaURL = "true"
+		invokedViaURL = new("true")
 	}
-	for _, c := range []struct{ op, key, value string }{
-		{"ArnLike", "AWS:SourceArn", deref(req.SourceArn)},
-		{"StringEquals", "AWS:SourceAccount", deref(req.SourceAccount)},
-		{"StringEquals", "aws:PrincipalOrgID", deref(req.PrincipalOrgID)},
-		{"StringEquals", keyFunctionURLAuthType, deref(req.FunctionURLAuthType)},
-		{"Bool", "lambda:InvokedViaFunctionUrl", invokedViaURL},
-		{"StringEquals", "lambda:EventSourceToken", deref(req.EventSourceToken)},
+	for _, c := range []struct {
+		value   *string
+		op, key string
+	}{
+		{req.SourceArn, "ArnLike", "AWS:SourceArn"},
+		{req.SourceAccount, "StringEquals", "AWS:SourceAccount"},
+		{req.PrincipalOrgID, "StringEquals", "aws:PrincipalOrgID"},
+		{req.FunctionURLAuthType, "StringEquals", keyFunctionURLAuthType},
+		{invokedViaURL, "Bool", "lambda:InvokedViaFunctionUrl"},
+		{req.EventSourceToken, "StringEquals", "lambda:EventSourceToken"},
 	} {
-		if c.value == "" {
+		// Every condition member sent is one; checkAddPermission refused
+		// any that was empty.
+		if c.value == nil {
 			continue
 		}
 		if s.Condition == nil {
@@ -335,7 +347,7 @@ func statementOf(req *lambdaapi.AddPermissionRequest, arn string) (*permissionSt
 		if s.Condition[c.op] == nil {
 			s.Condition[c.op] = map[string]string{}
 		}
-		s.Condition[c.op][c.key] = c.value
+		s.Condition[c.op][c.key] = *c.value
 	}
 	return s, nil
 }
