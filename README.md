@@ -839,7 +839,7 @@ siblings `../identity` and `../queues` by default, or the directories
 `TULE_E2E_IDENTITY_DIR` and `TULE_E2E_QUEUES_DIR` name. The execution role
 tests also run a real object-store, at `../object-store` or
 `TULE_E2E_OBJECT_STORE_DIR`, which holds the role sessions to their
-policies. CI checks out `tulehq/identity` v0.3.1, `tulehq/queues` v0.2.0
+policies. CI checks out `tulehq/identity` v0.4.0, `tulehq/queues` v0.2.0
 and `tulehq/object-store` v0.6.0 and sets them.
 
 ## Upgrading from v0.1

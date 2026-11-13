@@ -29,7 +29,7 @@ const (
 	userARN    = "arn:aws:iam::000000000000:user/dev"
 )
 
-// fakeIdentity answers the signing-key endpoint at version 2 for one IAM
+// fakeIdentity answers the signing-key endpoint at version 3 for one IAM
 // user key, with policies as its identity policies. It does not check the
 // caller's signature: the real identity's endpoint is exercised by the
 // end-to-end tests.
@@ -57,7 +57,7 @@ func fakeIdentityAs(t *testing.T, account, arn string, policies ...string) *http
 			_ = json.NewEncoder(w).Encode(keysource.ErrorResponse{Code: "UnknownAccessKey"})
 			return
 		}
-		p := keysource.Principal{AccountID: account, ARN: arn, AccessKeyID: userKeyID}
+		p := principalOf(account, arn)
 		for _, doc := range policies {
 			p.Policies = append(p.Policies, json.RawMessage(doc))
 		}
@@ -69,6 +69,24 @@ func fakeIdentityAs(t *testing.T, account, arn string, policies ...string) *http
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// principalOf is the principal of the user key, with the attributes the
+// signing-key endpoint gives at version 3 for arn: an IAM user, or a
+// session of a role without a path.
+func principalOf(account, arn string) keysource.Principal {
+	p := keysource.Principal{
+		AccountID: account, ARN: arn, AccessKeyID: userKeyID,
+		PrincipalARN: arn, UserID: "AIDAEXAMPLEUSER00001",
+		PrincipalType: string(sigv4.PrincipalTypeUser),
+	}
+	if rest, ok := strings.CutPrefix(arn, "arn:aws:sts::"+account+":assumed-role/"); ok {
+		role, session, _ := strings.Cut(rest, "/")
+		p.PrincipalARN = "arn:aws:iam::" + account + ":role/" + role
+		p.UserID = "AROAEXAMPLEROLE00001:" + session
+		p.PrincipalType = string(sigv4.PrincipalTypeAssumedRole)
+	}
+	return p
 }
 
 // userClient is a Lambda client of srv signing with the user's key.
@@ -353,9 +371,9 @@ func createActiveOrFailed(t *testing.T, c *lambda.Client, name string) {
 }
 
 // TestAnotherAccountsPrincipalIsDenied gives a member account's session an
-// identity policy that allows everything: without a resource-based policy,
-// which nothing here can grant, it is still denied, as AWS denies a
-// cross-account request no resource-based policy allows.
+// identity policy that allows everything: ListFunctions acts on no function,
+// so no resource-based policy can allow it, and it is still denied, as AWS
+// denies a cross-account request no resource-based policy allows.
 func TestAnotherAccountsPrincipalIsDenied(t *testing.T) {
 	const member = "arn:aws:sts::111111111111:assumed-role/OrganizationAccountAccessRole/s"
 	all := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*"}}`

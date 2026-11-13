@@ -11,12 +11,16 @@ import (
 	"testing"
 	"time"
 
+	"tule.dev/policy"
 	"tule.dev/sigv4"
 )
 
 const (
 	userARN    = "arn:aws:iam::123456789012:user/dev/alice"
+	userID     = "AIDAEXAMPLEUSER00001"
 	sessionARN = "arn:aws:sts::123456789012:assumed-role/runner/s1"
+	roleARN    = "arn:aws:iam::123456789012:role/ci/runner"
+	roleID     = "AROAEXAMPLEROLE00001"
 	fnARN      = "arn:aws:lambda:us-east-1:123456789012:function:f"
 )
 
@@ -28,8 +32,13 @@ func signed(p sigv4.Principal) *http.Request {
 	return r.WithContext(sigv4.NewContext(r.Context(), p))
 }
 
+// user is an IAM user of the service's account, with the attributes
+// identity's signing-key endpoint gives at version 3.
 func user(docs ...string) sigv4.Principal {
-	p := sigv4.Principal{AccountID: "123456789012", ARN: userARN}
+	p := sigv4.Principal{
+		AccountID: "123456789012", ARN: userARN, PrincipalARN: userARN,
+		UserID: userID, Type: sigv4.PrincipalTypeUser,
+	}
 	for _, d := range docs {
 		p.Policies = append(p.Policies, json.RawMessage(d))
 	}
@@ -38,6 +47,21 @@ func user(docs ...string) sigv4.Principal {
 
 func reqs(rs ...Request) func() ([]Request, error) {
 	return func() ([]Request, error) { return rs, nil }
+}
+
+// session is a session of the role runner, at the path /ci/, of account.
+func session(account string, docs ...string) sigv4.Principal {
+	p := sigv4.Principal{
+		AccountID:    account,
+		ARN:          "arn:aws:sts::" + account + ":assumed-role/runner/s1",
+		PrincipalARN: "arn:aws:iam::" + account + ":role/ci/runner",
+		UserID:       roleID + ":s1",
+		Type:         sigv4.PrincipalTypeAssumedRole,
+	}
+	for _, d := range docs {
+		p.Policies = append(p.Policies, json.RawMessage(d))
+	}
+	return p
 }
 
 func allow(action, resource string) string {
@@ -50,6 +74,8 @@ func TestRootIsNeverEvaluated(t *testing.T) {
 	built := false
 	err := a.Authorize(signed(sigv4.Principal{
 		Root: true, AccountID: "123456789012", ARN: "arn:aws:iam::123456789012:root",
+		PrincipalARN: "arn:aws:iam::123456789012:root", UserID: "123456789012",
+		Type: sigv4.PrincipalTypeAccount,
 	}),
 		func() ([]Request, error) {
 			built = true
@@ -75,7 +101,7 @@ func TestNoPolicyIsDeniedInAWSsWords(t *testing.T) {
 	err := New("123456789012", "us-east-1", time.Now).Authorize(signed(user()),
 		reqs(Request{Action: "lambda:GetFunction", Resource: fnARN}))
 	var d *Denied
-	if !errors.As(err, &d) || d.Why != NoIdentityPolicy {
+	if !errors.As(err, &d) || d.Why != policy.NoIdentityAllow {
 		t.Fatalf("got %v", err)
 	}
 	want := "User: " + userARN + " is not authorized to perform: lambda:GetFunction on " +
@@ -96,7 +122,7 @@ func TestAnExplicitDenyWinsAndSaysSo(t *testing.T) {
 	).Authorize(signed(user(allow("lambda:GetFunction", "*"), deny)),
 		reqs(Request{Action: "lambda:GetFunction", Resource: fnARN}))
 	var d *Denied
-	if !errors.As(err, &d) || d.Why != ExplicitDeny {
+	if !errors.As(err, &d) || d.Why != policy.IdentityDeny {
 		t.Fatalf("got %v", err)
 	}
 	if !strings.HasSuffix(err.Error(), "on resource: "+fnARN+
@@ -210,34 +236,41 @@ func TestParsedPoliciesAreCachedAndBounded(t *testing.T) {
 
 func TestTheGlobalKeysOfAUser(t *testing.T) {
 	p := user()
+	p.Tags = map[string]string{"team": "a"}
 	got := GlobalKeys(signed(p), &p, "us-east-1", now)
 	want := map[string][]string{
-		"aws:SourceIp":         {"203.0.113.7"},
-		"aws:RequestedRegion":  {"us-east-1"},
-		"aws:CurrentTime":      {"2026-11-13T10:00:00Z"},
-		"aws:EpochTime":        {"1794564000"},
-		"aws:SecureTransport":  {"false"},
-		"aws:PrincipalAccount": {"123456789012"},
-		"aws:PrincipalArn":     {userARN},
-		"aws:PrincipalType":    {"User"},
-		"aws:username":         {"alice"},
+		"aws:SourceIp":          {"203.0.113.7"},
+		"aws:RequestedRegion":   {"us-east-1"},
+		"aws:CurrentTime":       {"2026-11-13T10:00:00Z"},
+		"aws:EpochTime":         {"1794564000"},
+		"aws:SecureTransport":   {"false"},
+		"aws:PrincipalTag/team": {"a"},
 	}
 	requireKeys(t, got, want)
+	if len(got) != len(want) {
+		t.Errorf("keys %v, want only %v", got, want)
+	}
 }
 
-func TestTheGlobalKeysOfARoleSession(t *testing.T) {
-	p := sigv4.Principal{AccountID: "123456789012", ARN: sessionARN}
+func TestTheGlobalKeysOverTLS(t *testing.T) {
+	p := session("123456789012")
 	r := signed(p)
 	r.TLS = &tls.ConnectionState{}
-	got := GlobalKeys(r, &p, "us-east-1", now)
-	if _, ok := got["aws:username"]; ok {
-		t.Error("a session has aws:username")
-	}
-	requireKeys(t, got, map[string][]string{
-		"aws:PrincipalArn":    {"arn:aws:iam::123456789012:role/runner"},
-		"aws:PrincipalType":   {"AssumedRole"},
+	requireKeys(t, GlobalKeys(r, &p, "us-east-1", now), map[string][]string{
 		"aws:SecureTransport": {"true"},
 	})
+}
+
+func TestTheCallerIsThePrincipals(t *testing.T) {
+	p := session("123456789012")
+	got := CallerOf(&p)
+	want := policy.Caller{
+		AccountID: "123456789012", ARN: sessionARN, PrincipalARN: roleARN,
+		UserID: roleID + ":s1", Type: policy.PrincipalTypeAssumedRole,
+	}
+	if got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
 }
 
 func TestASourceIpConditionIsHonored(t *testing.T) {
@@ -260,16 +293,159 @@ func TestASourceIpConditionIsHonored(t *testing.T) {
 	}
 }
 
-func TestARoleSessionMatchesItsRolesARN(t *testing.T) {
-	doc := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*",` +
-		`"Condition":{"ArnEquals":{"aws:PrincipalArn":"arn:aws:iam::123456789012:role/runner"}}}}`
-	p := sigv4.Principal{
-		AccountID: "123456789012", ARN: sessionARN,
-		Policies: []json.RawMessage{json.RawMessage(doc)},
+// TestARoleSessionMatchesItsRolesARNWithItsPath checks aws:PrincipalArn of
+// a session: its role's ARN with the role's path, so a condition on the path
+// applies and one on the path-less ARN does not.
+func TestARoleSessionMatchesItsRolesARNWithItsPath(t *testing.T) {
+	cond := func(arn string) string {
+		return `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*",` +
+			`"Resource":"*","Condition":{"ArnLike":{"aws:PrincipalArn":"` + arn + `"}}}}`
 	}
-	if err := New("123456789012", "us-east-1", time.Now).Authorize(signed(p),
-		reqs(Request{Action: "lambda:GetFunction", Resource: fnARN})); err != nil {
+	a := New("123456789012", "us-east-1", time.Now)
+	get := reqs(Request{Action: "lambda:GetFunction", Resource: fnARN})
+	for arn, ok := range map[string]bool{
+		roleARN:                                 true,
+		"arn:aws:iam::123456789012:role/ci/*":   true,
+		"arn:aws:iam::123456789012:role/runner": false,
+	} {
+		if err := a.Authorize(signed(session("123456789012", cond(arn))), get); (err == nil) != ok {
+			t.Errorf("%s: %v", arn, err)
+		}
+	}
+}
+
+func TestAPrincipalTagConditionIsHonored(t *testing.T) {
+	doc := `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"*","Resource":"*",` +
+		`"Condition":{"StringEquals":{"aws:PrincipalTag/team":"a"}}}}`
+	a := New("123456789012", "us-east-1", time.Now)
+	get := reqs(Request{Action: "lambda:GetFunction", Resource: fnARN})
+	for team, ok := range map[string]bool{"a": true, "b": false} {
+		p := user(doc)
+		p.Tags = map[string]string{"Team": team}
+		if err := a.Authorize(signed(p), get); (err == nil) != ok {
+			t.Errorf("team %s: %v", team, err)
+		}
+	}
+}
+
+// TestASessionWhoseRoleWasDeletedIsDenied checks the orphaned session rule:
+// an empty PrincipalARN is never derived from the session's ARN.
+func TestASessionWhoseRoleWasDeletedIsDenied(t *testing.T) {
+	p := session("123456789012", allow("*", "*"))
+	p.PrincipalARN = ""
+	err := New("123456789012", "us-east-1", time.Now).Authorize(signed(p),
+		reqs(Request{Action: "lambda:GetFunction", Resource: fnARN}))
+	var d *Denied
+	if !errors.As(err, &d) || d.Why != policy.NoIdentityAllow {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// grant is a function policy allowing action on fnARN to principal, a JSON
+// value of the Principal element.
+func grant(effect, principal, action string) string {
+	return `{"Version":"2012-10-17","Id":"default","Statement":[{"Sid":"s","Effect":"` +
+		effect + `","Principal":` + principal + `,"Action":"` + action +
+		`","Resource":"` + fnARN + `"}]}`
+}
+
+func TestTheResourcePolicyIsEvaluated(t *testing.T) {
+	a := New("123456789012", "us-east-1", time.Now)
+	const get = "lambda:GetFunction"
+	other := session("999999999999", allow("*", "*"))
+	for name, tt := range map[string]struct {
+		policy string
+		p      sigv4.Principal
+		why    policy.Reason
+	}{
+		"same account, granted by name": {
+			p: user(), policy: grant("Allow", `{"AWS":"`+userARN+`"}`, get),
+		},
+		"same account, granted by role ARN": {
+			p: session("123456789012"), policy: grant("Allow", `{"AWS":"`+roleARN+`"}`, get),
+		},
+		"same account, granted to the account only": {
+			p: user(), policy: grant("Allow", `{"AWS":"123456789012"}`, get),
+			why: policy.NoIdentityAllow,
+		},
+		"same account, account grant and identity allow": {
+			p: user(allow(get, "*")), policy: grant("Allow", `{"AWS":"123456789012"}`, get),
+		},
+		"same account, resource deny": {
+			p: user(allow("*", "*")), policy: grant("Deny", `"*"`, get),
+			why: policy.ResourceDeny,
+		},
+		"another account, no resource policy": {
+			p: other, why: policy.NoResourceAllow,
+		},
+		"another account, granted": {
+			p: other, policy: grant("Allow", `{"AWS":"999999999999"}`, get),
+		},
+		"another account, granted another action": {
+			p: other, policy: grant("Allow", `{"AWS":"999999999999"}`, "lambda:InvokeFunction"),
+			why: policy.NoResourceAllow,
+		},
+		"another account, granted without an identity allow": {
+			p: session("999999999999"), policy: grant("Allow", `{"AWS":"999999999999"}`, get),
+			why: policy.NoIdentityAllow,
+		},
+		"another account, resource deny": {
+			p: other, policy: grant("Deny", `{"AWS":"999999999999"}`, get),
+			why: policy.ResourceDeny,
+		},
+	} {
+		err := a.Authorize(signed(tt.p),
+			reqs(Request{Action: get, Resource: fnARN, Policy: tt.policy}))
+		if tt.why == policy.NoReason {
+			if err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+			continue
+		}
+		var d *Denied
+		if !errors.As(err, &d) || d.Why != tt.why ||
+			!strings.HasSuffix(err.Error(), "on resource: "+fnARN+" "+tt.why.Message(get)) {
+			t.Errorf("%s: got %v, want %s", name, err, tt.why)
+		}
+	}
+}
+
+func TestTheResourceBasedMessages(t *testing.T) {
+	for why, tail := range map[policy.Reason]string{
+		policy.IdentityDeny:    "with an explicit deny in an identity-based policy",
+		policy.ResourceDeny:    "with an explicit deny in a resource-based policy",
+		policy.NoIdentityAllow: "because no identity-based policy allows the lambda:X action",
+		policy.NoResourceAllow: "because no resource-based policy allows the lambda:X action",
+	} {
+		d := &Denied{Principal: userARN, Action: "lambda:X", Resource: fnARN, Why: why}
+		want := "User: " + userARN + " is not authorized to perform: lambda:X on resource: " +
+			fnARN + " " + tail
+		if d.Error() != want {
+			t.Errorf("%s:\n got %s\nwant %s", why, d.Error(), want)
+		}
+	}
+}
+
+func TestAStoredPolicyThatDoesNotParseFailsClosed(t *testing.T) {
+	err := New("123456789012", "us-east-1", time.Now).Authorize(signed(user(allow("*", "*"))),
+		reqs(Request{Action: "lambda:GetFunction", Resource: fnARN, Policy: `{"Statement":`}))
+	if !errors.Is(err, ErrStoredPolicy) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// TestTheSameDocumentIsCachedPerKind checks that a document parsed as an
+// identity policy is not served from the cache as a resource-based one.
+func TestTheSameDocumentIsCachedPerKind(t *testing.T) {
+	doc := allow("*", "*")
+	a := New("123456789012", "us-east-1", time.Now)
+	if err := a.Authorize(signed(user(doc)), reqs()); err != nil {
 		t.Fatal(err)
+	}
+	err := a.Authorize(signed(user(doc)),
+		reqs(Request{Action: "lambda:GetFunction", Resource: fnARN, Policy: doc}))
+	if !errors.Is(err, ErrStoredPolicy) {
+		t.Fatalf("an identity policy as a resource policy: %v", err)
 	}
 }
 
@@ -282,59 +458,23 @@ func requireKeys(t *testing.T, got, want map[string][]string) {
 	}
 }
 
-func TestAnotherAccountsPrincipalIsDenied(t *testing.T) {
-	a := New("123456789012", "us-east-1", time.Now)
-	member := func(docs ...string) sigv4.Principal {
-		p := sigv4.Principal{
-			AccountID: "999999999999",
-			ARN:       "arn:aws:sts::999999999999:assumed-role/OrganizationAccountAccessRole/s",
-		}
-		for _, d := range docs {
-			p.Policies = append(p.Policies, json.RawMessage(d))
-		}
-		return p
-	}
-	get := reqs(Request{Action: "lambda:GetFunction", Resource: fnARN})
-	for name, tt := range map[string]struct {
-		tail string
-		p    sigv4.Principal
-		why  Denial
-	}{
-		"allowed": {
-			p:    member(allow("*", "*")),
-			why:  NoResourcePolicy,
-			tail: "because no resource-based policy allows the lambda:GetFunction action",
-		},
-		"no policy": {
-			p:    member(),
-			why:  NoIdentityPolicy,
-			tail: "because no identity-based policy allows the lambda:GetFunction action",
-		},
-		"denied": {
-			p: member(allow("*", "*"), `{"Version":"2012-10-17","Statement":{"Effect":`+
-				`"Deny","Action":"*","Resource":"*"}}`),
-			why:  ExplicitDeny,
-			tail: "with an explicit deny in an identity-based policy",
-		},
-	} {
-		err := a.Authorize(signed(tt.p), get)
-		var d *Denied
-		if !errors.As(err, &d) || d.Why != tt.why || !strings.HasSuffix(err.Error(), tt.tail) {
-			t.Errorf("%s: got %v", name, err)
-		}
-	}
-}
-
-func TestRootOfAnotherAccountIsRefused(t *testing.T) {
+func TestRootOfAnotherAccountNeedsAResourceGrant(t *testing.T) {
 	a := New("123456789012", "us-east-1", time.Now)
 	other := sigv4.Principal{
-		Root: true, AccountID: "999999999999",
-		ARN: "arn:aws:iam::999999999999:root",
+		Root: true, AccountID: "999999999999", ARN: "arn:aws:iam::999999999999:root",
+		PrincipalARN: "arn:aws:iam::999999999999:root", UserID: "999999999999",
+		Type: sigv4.PrincipalTypeAccount,
 	}
 	err := a.Authorize(signed(other), reqs(Request{Action: "lambda:GetFunction", Resource: fnARN}))
 	var d *Denied
-	if !errors.As(err, &d) || d.Why != NoIdentityPolicy {
-		t.Fatalf("got %v", err)
+	if !errors.As(err, &d) || d.Why != policy.NoResourceAllow {
+		t.Fatalf("no resource policy: %v", err)
+	}
+	if err = a.Authorize(signed(other), reqs(Request{
+		Action: "lambda:GetFunction", Resource: fnARN,
+		Policy: grant("Allow", `{"AWS":"999999999999"}`, "lambda:GetFunction"),
+	})); err != nil {
+		t.Fatalf("granted by the resource policy: %v", err)
 	}
 }
 
@@ -366,5 +506,33 @@ func TestTheStaticKeyUnderAConfiguredAccountIsRoot(t *testing.T) {
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestRootAndTypeMustAgree checks that a principal whose Root and Type
+// disagree is a fault, never evaluated or skipped.
+func TestRootAndTypeMustAgree(t *testing.T) {
+	a := New("123456789012", "us-east-1", time.Now)
+	rootARN := "arn:aws:iam::123456789012:root"
+	for name, p := range map[string]sigv4.Principal{
+		"an account that is not root": {
+			AccountID: "123456789012", ARN: rootARN, PrincipalARN: rootARN,
+			UserID: "123456789012", Type: sigv4.PrincipalTypeAccount,
+			Policies: []json.RawMessage{json.RawMessage(allow("*", "*"))},
+		},
+		"root of another type": func() sigv4.Principal {
+			p := user()
+			p.Root = true
+			return p
+		}(),
+		"root of no type": {Root: true, AccountID: "123456789012", ARN: rootARN},
+	} {
+		err := a.Authorize(signed(p), func() ([]Request, error) {
+			t.Errorf("%s: evaluated", name)
+			return nil, nil
+		})
+		if !errors.Is(err, ErrInconsistentPrincipal) {
+			t.Errorf("%s: got %v", name, err)
+		}
 	}
 }
