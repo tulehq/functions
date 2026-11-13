@@ -510,7 +510,9 @@ func TestTheStaticKeyUnderAConfiguredAccountIsRoot(t *testing.T) {
 }
 
 // TestRootAndTypeMustAgree checks that a principal whose Root and Type
-// disagree is a fault, never evaluated or skipped.
+// disagree is a fault, never evaluated or skipped: the check runs before
+// the root shortcut, so a root of type User of the service's own account
+// fails too.
 func TestRootAndTypeMustAgree(t *testing.T) {
 	a := New("123456789012", "us-east-1", time.Now)
 	rootARN := "arn:aws:iam::123456789012:root"
@@ -520,7 +522,7 @@ func TestRootAndTypeMustAgree(t *testing.T) {
 			UserID: "123456789012", Type: sigv4.PrincipalTypeAccount,
 			Policies: []json.RawMessage{json.RawMessage(allow("*", "*"))},
 		},
-		"root of another type": func() sigv4.Principal {
+		"root of type User in the service's own account": func() sigv4.Principal {
 			p := user()
 			p.Root = true
 			return p
