@@ -307,8 +307,15 @@ func TestAnImageURIOutsideDockersGrammarIsRefused(t *testing.T) {
 }
 
 // TestStoppingWithAnInvocationInFlightIsClean stops the app the way a
-// SIGTERM does while a synchronous invocation runs: the stop succeeds, the
-// invocation fails, and no container is left.
+// SIGTERM does while a synchronous invocation runs: the invocation is
+// aborted at once rather than waited out, the stop succeeds, and no
+// container is left.
+//
+// The client is the test's own, and its idle connections are closed before
+// the stop, as test/e2e's harness does. A connection the transport dialed
+// and then did not use, which it does when an idle connection comes back
+// while it dials, never sends a request, and net/http's Shutdown waits for
+// such a connection until it is 5 seconds old.
 func TestStoppingWithAnInvocationInFlightIsClean(t *testing.T) {
 	image := testfn.Image(t)
 	t.Setenv("TULE_Store_Path", filepath.Join(t.TempDir(), "functions.db"))
@@ -323,9 +330,11 @@ func TestStoppingWithAnInvocationInFlightIsClean(t *testing.T) {
 		t.Fatal(err)
 	}
 	go func() { _ = a.Server().Serve(ln) }()
+	httpClient := &http.Client{Timeout: time.Minute}
 	c := lambda.New(lambda.Options{
 		Region: "us-east-1", BaseEndpoint: aws.String("http://" + ln.Addr().String()),
 		Credentials:      credentials.NewStaticCredentialsProvider("test", "test", ""),
+		HTTPClient:       httpClient,
 		RetryMaxAttempts: 1,
 	})
 	name := "stop-" + ids.Hex(4)
@@ -338,18 +347,52 @@ func TestStoppingWithAnInvocationInFlightIsClean(t *testing.T) {
 		})
 		invoked <- iErr
 	}()
-	time.Sleep(time.Second)
+	waitRunning(t, name)
+	httpClient.CloseIdleConnections()
 	start := time.Now()
-	if err = a.Stop(context.Background()); err != nil {
+	stopped := make(chan error, 1)
+	go func() { stopped <- a.Stop(context.Background()) }()
+	select {
+	case iErr := <-invoked:
+		if iErr == nil {
+			t.Fatal("the invocation succeeded across the stop")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the stop did not abort the invocation within 3s")
+	}
+	if err = <-stopped; err != nil {
 		t.Fatalf("stop = %v, want a clean stop", err)
 	}
 	if took := time.Since(start); took > 3*time.Second {
-		t.Fatalf("the stop took %v, waiting out the invocation", took)
-	}
-	if iErr := <-invoked; iErr == nil {
-		t.Fatal("the invocation succeeded across the stop")
+		t.Fatalf("the stop took %v", took)
 	}
 	requireNoContainers(t, name)
+}
+
+// waitRunning waits for the function to have a running container, so the
+// stop meets an invocation in flight rather than one still on its way.
+func waitRunning(t *testing.T, function string) {
+	t.Helper()
+	dc, err := docker.New("unix:///var/run/docker.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		found, lErr := dc.ListContainers(t.Context(), runner.LabelFunction, function)
+		if lErr != nil {
+			t.Fatal(lErr)
+		}
+		if len(found) > 0 {
+			// The container runs; give the event the time to reach it.
+			time.Sleep(200 * time.Millisecond)
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the invocation's container never started")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // requireNoContainers fails unless the function has no container left.
