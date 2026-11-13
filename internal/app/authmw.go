@@ -30,8 +30,9 @@ var identityTimeout = 10 * time.Second
 // through, the Lambda API's and the retrieval API's alike. It knows the
 // configured root key and, when an identity endpoint is configured, every
 // key identity issued, asked of identity on each request after the root key.
-// Any key it accepts may call every operation: there are no permissions.
-// Requests are accepted signed for lambda in any region. The path is
+// The root key may call every operation; any other key's principal is
+// authorized by its identity policies, which identity sends with the key
+// (package authz). Requests are accepted signed for lambda in any region. The path is
 // canonicalized encoded twice, as every service but S3 signs it, since
 // function ARNs, with their colons, appear in paths.
 func newVerifier(cfg *Config) (*sigv4.Verifier, error) {

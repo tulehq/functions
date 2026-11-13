@@ -2,11 +2,14 @@ package app
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gasmod/gas"
 	"github.com/gasmod/gas/config"
+
+	"tule.dev/functions/internal/contracts"
 )
 
 func loadEnvConfig(t *testing.T, id, secret string) (*Config, error) {
@@ -163,5 +166,57 @@ func TestLoadConfigChecksTheFunctionCredentials(t *testing.T) {
 				t.Fatalf("load config = %v, want ok %v", err, tt.ok)
 			}
 		})
+	}
+}
+
+func TestTheFunctionCredentialsDefaultToRoleWithIdentity(t *testing.T) {
+	t.Setenv("TULE_Auth_IdentityEndpoint", "http://localhost:9030")
+	cfg, err := loadEnvConfig(t, "AKID", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Functions.FunctionCredentials; got != "role" {
+		t.Fatalf("default with identity = %q, want role", got)
+	}
+	t.Setenv("TULE_Functions_FunctionCredentials", "root")
+	if cfg, err = loadEnvConfig(t, "AKID", "secret"); err != nil ||
+		cfg.Functions.FunctionCredentials != "root" {
+		t.Fatalf("root with identity: %v", err)
+	}
+}
+
+func TestRoleCredentialsNeedIdentity(t *testing.T) {
+	t.Setenv("TULE_Functions_FunctionCredentials", "role")
+	if _, err := loadEnvConfig(t, "AKID", "secret"); err == nil {
+		t.Fatal("role without an identity endpoint was accepted")
+	}
+	t.Setenv("TULE_Functions_FunctionAccessKeyID", "AKIDFN")
+	t.Setenv("TULE_Functions_FunctionSecretAccessKey", "fn-secret")
+	t.Setenv("TULE_Auth_IdentityEndpoint", "http://localhost:9030")
+	if _, err := loadEnvConfig(t, "AKID", "secret"); err == nil {
+		t.Fatal("role with a custom key was accepted")
+	}
+}
+
+func TestStaticCredentialsWithIdentityAreWarnedAbout(t *testing.T) {
+	for _, tt := range []struct {
+		identity, mode string
+		warned         bool
+	}{
+		{"http://localhost:9030", "root", true},
+		{"http://localhost:9030", "custom", true},
+		{"http://localhost:9030", "role", false},
+		{"http://localhost:9030", "none", false},
+		{"", "root", false},
+	} {
+		cfg := &Config{
+			Auth:      &authSettings{IdentityEndpoint: tt.identity},
+			Functions: &contracts.Settings{FunctionCredentials: tt.mode},
+		}
+		msg := staticCredentialsWarning(cfg)
+		if (msg != "") != tt.warned ||
+			tt.warned && !strings.Contains(msg, "lambda:UpdateFunctionCode") {
+			t.Errorf("%q %s: %q", tt.identity, tt.mode, msg)
+		}
 	}
 }

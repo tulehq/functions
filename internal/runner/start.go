@@ -32,23 +32,12 @@ var errDeletedMeanwhile = fmt.Errorf("%w while its container was being created",
 // once.
 func (r *Runner) startContainer(ctx context.Context, c *container) error {
 	spec := c.spec
+	creds, err := r.credentials(ctx, c)
+	if err != nil {
+		return err
+	}
 	r.cfg.Runtime.Register(c.token, c)
-	id, err := r.cfg.Docker.CreateContainer(ctx, &docker.ContainerSpec{
-		Name:        "tule-fn-" + spec.Function + "-" + ids.Hex(4),
-		Image:       spec.Image,
-		Entrypoint:  spec.EntryPoint,
-		Cmd:         spec.Command,
-		WorkingDir:  spec.WorkingDir,
-		Env:         r.environment(spec, c.token),
-		ExtraHosts:  r.cfg.ExtraHosts,
-		MemoryBytes: int64(spec.MemorySize) << 20,
-		PidsLimit:   r.cfg.PidsLimit,
-		LogMaxSize:  logMaxSize,
-		Labels: map[string]string{
-			LabelInstance: r.cfg.InstanceID,
-			LabelFunction: spec.Function,
-		},
-	})
+	id, err := r.cfg.Docker.CreateContainer(ctx, r.containerSpec(c, creds))
 	r.mu.Lock()
 	if err != nil {
 		r.removeLocked(c)
@@ -109,6 +98,47 @@ func (r *Runner) attach(ctx context.Context, c *container) error {
 	return nil
 }
 
+// containerSpec is what c is created as, with creds as its credentials.
+func (r *Runner) containerSpec(c *container, creds *Credentials) *docker.ContainerSpec {
+	spec := c.spec
+	return &docker.ContainerSpec{
+		Name:        "tule-fn-" + spec.Function + "-" + ids.Hex(4),
+		Image:       spec.Image,
+		Entrypoint:  spec.EntryPoint,
+		Cmd:         spec.Command,
+		WorkingDir:  spec.WorkingDir,
+		Env:         r.environment(spec, c.token, creds),
+		ExtraHosts:  r.cfg.ExtraHosts,
+		MemoryBytes: int64(spec.MemorySize) << 20,
+		PidsLimit:   r.cfg.PidsLimit,
+		LogMaxSize:  logMaxSize,
+		Labels: map[string]string{
+			LabelInstance: r.cfg.InstanceID,
+			LabelFunction: spec.Function,
+		},
+	}
+}
+
+// credentials returns the credentials c starts with, from Credentials when
+// it is set, or nil. When they cannot be had, c is given up as a container
+// that could not be created is.
+func (r *Runner) credentials(ctx context.Context, c *container) (*Credentials, error) {
+	if r.cfg.Credentials == nil {
+		return nil, nil
+	}
+	creds, err := r.cfg.Credentials(ctx, c.spec)
+	if err != nil {
+		r.mu.Lock()
+		r.removeLocked(c)
+		r.finishLocked(c)
+		r.mu.Unlock()
+		close(c.logsDone)
+		return nil, fmt.Errorf("runner: credentials for %s: %w", c.spec.Function, err)
+	}
+	c.expires = creds.Expiration
+	return creds, nil
+}
+
 // watch waits for the container to exit, and records its exit status.
 func (r *Runner) watch(ctx context.Context, c *container) {
 	defer r.wg.Done()
@@ -120,8 +150,9 @@ func (r *Runner) watch(ctx context.Context, c *container) {
 }
 
 // environment is the container's environment: the function's variables,
-// then the ones Lambda defines, which a function cannot set.
-func (r *Runner) environment(spec *Spec, token string) []string {
+// then the ones Lambda defines, which a function cannot set, with creds as
+// its credentials when they are given.
+func (r *Runner) environment(spec *Spec, token string, creds *Credentials) []string {
 	env := make([]string, 0, len(spec.Env)+12)
 	keys := make([]string, 0, len(spec.Env))
 	for k := range spec.Env {
@@ -131,7 +162,16 @@ func (r *Runner) environment(spec *Spec, token string) []string {
 	for _, k := range keys {
 		env = append(env, k+"="+spec.Env[k])
 	}
-	if r.cfg.AccessKeyID != "" {
+	switch {
+	case creds != nil:
+		// The variables Lambda sets from the function's role.
+		env = append(env,
+			"AWS_ACCESS_KEY_ID="+creds.AccessKeyID,
+			"AWS_ACCESS_KEY="+creds.AccessKeyID,
+			"AWS_SECRET_ACCESS_KEY="+creds.SecretAccessKey,
+			"AWS_SESSION_TOKEN="+creds.SessionToken,
+		)
+	case r.cfg.AccessKeyID != "":
 		// The variables Lambda sets from the function's role, but for
 		// AWS_SESSION_TOKEN: a static key has none.
 		env = append(env,

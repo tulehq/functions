@@ -66,6 +66,7 @@ const (
 	CodeInvalidSignature      = "InvalidSignatureException"
 	CodeUnrecognizedClient    = "UnrecognizedClientException"
 	CodeExpiredToken          = "ExpiredTokenException"
+	CodeAccessDenied          = "AccessDeniedException"
 )
 
 // capitalMessage are the errors whose model member is "Message".
@@ -94,6 +95,13 @@ func ErrNotFound(msg string) *Error {
 // ErrConflict is ResourceConflictException, 409.
 func ErrConflict(msg string) *Error {
 	return NewError(http.StatusConflict, CodeResourceConflict, msg)
+}
+
+// ErrAccessDenied is AccessDeniedException, 403, the common error Lambda
+// answers a request no identity policy allows with (the Lambda API
+// Reference, Common Errors).
+func ErrAccessDenied(msg string) *Error {
+	return NewError(http.StatusForbidden, CodeAccessDenied, msg)
 }
 
 // ErrService is ServiceException, 500, which every unrecognized failure
@@ -188,6 +196,9 @@ func NoContent(ctx gas.Context) error {
 func Decode[T any](ctx gas.Context) (T, error) {
 	var body T
 	err := json.NewDecoder(ctx.Request().Body).Decode(&body)
+	if apiErr, ok := duplicateTag(err); ok {
+		return body, apiErr
+	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		return body, NewError(http.StatusBadRequest, CodeInvalidRequestContent,
 			"Could not parse request body into json: "+err.Error())

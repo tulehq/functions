@@ -34,20 +34,20 @@ type Environment struct {
 
 // CreateFunctionRequest is the body of CreateFunction.
 type CreateFunctionRequest struct {
-	Code          *FunctionCode     `json:"Code"`
-	Environment   *Environment      `json:"Environment"`
-	ImageConfig   *ImageConfig      `json:"ImageConfig"`
-	Tags          map[string]string `json:"Tags"`
-	FunctionName  *string           `json:"FunctionName"`
-	Role          *string           `json:"Role"`
-	Description   *string           `json:"Description"`
-	PackageType   *string           `json:"PackageType"`
-	Runtime       *string           `json:"Runtime"`
-	Handler       *string           `json:"Handler"`
-	Timeout       *int              `json:"Timeout"`
-	MemorySize    *int              `json:"MemorySize"`
-	Architectures []string          `json:"Architectures"`
-	Publish       bool              `json:"Publish"`
+	Code          *FunctionCode `json:"Code"`
+	Environment   *Environment  `json:"Environment"`
+	ImageConfig   *ImageConfig  `json:"ImageConfig"`
+	Tags          RequestTags   `json:"Tags"`
+	FunctionName  *string       `json:"FunctionName"`
+	Role          *string       `json:"Role"`
+	Description   *string       `json:"Description"`
+	PackageType   *string       `json:"PackageType"`
+	Runtime       *string       `json:"Runtime"`
+	Handler       *string       `json:"Handler"`
+	Timeout       *int          `json:"Timeout"`
+	MemorySize    *int          `json:"MemorySize"`
+	Architectures []string      `json:"Architectures"`
+	Publish       bool          `json:"Publish"`
 }
 
 // UpdateFunctionCodeRequest is the body of UpdateFunctionCode.
@@ -133,7 +133,7 @@ type ListFunctionsResponse struct {
 
 // TagResourceRequest is the body of TagResource.
 type TagResourceRequest struct {
-	Tags map[string]string `json:"Tags"`
+	Tags RequestTags `json:"Tags"`
 }
 
 // ListTagsResponse is the body ListTags answers with.
@@ -148,15 +148,15 @@ type ScalingConfig struct {
 
 // CreateEventSourceMappingRequest is the body of CreateEventSourceMapping.
 type CreateEventSourceMappingRequest struct {
-	ScalingConfig                  *ScalingConfig    `json:"ScalingConfig"`
-	Tags                           map[string]string `json:"Tags"`
-	EventSourceArn                 *string           `json:"EventSourceArn"`
-	FunctionName                   *string           `json:"FunctionName"`
-	Enabled                        *bool             `json:"Enabled"`
-	BatchSize                      *int              `json:"BatchSize"`
-	MaximumBatchingWindowInSeconds *int              `json:"MaximumBatchingWindowInSeconds"`
-	StartingPosition               *string           `json:"StartingPosition"`
-	FunctionResponseTypes          []string          `json:"FunctionResponseTypes"`
+	ScalingConfig                  *ScalingConfig `json:"ScalingConfig"`
+	Tags                           RequestTags    `json:"Tags"`
+	EventSourceArn                 *string        `json:"EventSourceArn"`
+	FunctionName                   *string        `json:"FunctionName"`
+	Enabled                        *bool          `json:"Enabled"`
+	BatchSize                      *int           `json:"BatchSize"`
+	MaximumBatchingWindowInSeconds *int           `json:"MaximumBatchingWindowInSeconds"`
+	StartingPosition               *string        `json:"StartingPosition"`
+	FunctionResponseTypes          []string       `json:"FunctionResponseTypes"`
 }
 
 // UpdateEventSourceMappingRequest is the body of UpdateEventSourceMapping.

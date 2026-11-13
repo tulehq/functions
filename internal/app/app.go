@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -12,8 +13,10 @@ import (
 	"github.com/gasmod/gas"
 	"github.com/gasmod/gas/database"
 	"github.com/gasmod/gas/migrate"
+	"tule.dev/identity/servicerole"
 	"tule.dev/sigv4"
 
+	"tule.dev/functions/internal/authz"
 	"tule.dev/functions/internal/contracts"
 	"tule.dev/functions/internal/engine"
 	"tule.dev/functions/internal/httpx"
@@ -46,8 +49,15 @@ func New(cfg *Config, extra ...gas.Option) (*gas.App, error) {
 	opts := append([]gas.Option{gas.WithCSRFInsecureBypassPattern("/")}, extra...)
 	app := gas.NewApp(opts...)
 
+	if msg := staticCredentialsWarning(cfg); msg != "" {
+		logger.Warn(msg).Str("credentials", cfg.Functions.FunctionCredentials).Send()
+	}
+	roles, rErr := newRoles(cfg)
+	if rErr != nil {
+		return nil, rErr
+	}
 	registerInfraServices(app, cfg, logger)
-	registerAppServices(app, cfg)
+	registerAppServices(app, cfg, roles)
 	registerAppModules(app, cfg)
 
 	// The engine starts once the store's schema is applied, which gas does
@@ -69,6 +79,45 @@ func New(cfg *Config, extra ...gas.Option) (*gas.App, error) {
 	installMiddleware(app.Router(), cfg, logger, verifier)
 
 	return app, nil
+}
+
+// staticCredentialsWarning is the warning logged at startup when identity
+// is configured and the functions nonetheless get one static key, the root
+// key or a custom one, rather than their roles' sessions: any principal
+// allowed to create or change a function's code and invoke it can run code
+// that reads that key, so it holds that key's access whatever its own
+// policies say. It is empty otherwise.
+func staticCredentialsWarning(cfg *Config) string {
+	if cfg.Auth.IdentityEndpoint == "" {
+		return ""
+	}
+	switch cfg.Functions.FunctionCredentials {
+	case contracts.CredentialsRoot, contracts.CredentialsCustom:
+		return "every function gets the " + cfg.Functions.FunctionCredentials + " key, not its " +
+			"execution role's session: any principal allowed lambda:CreateFunction or " +
+			"lambda:UpdateFunctionCode and lambda:InvokeFunction can obtain that key; set " +
+			"TULE_Functions_FunctionCredentials=role to give functions their roles"
+	}
+	return ""
+}
+
+// newRoles returns the client the functions' execution roles are assumed
+// through, identity's assume-role endpoint, signed with the root key, when
+// they run with their roles' credentials, and nil otherwise.
+func newRoles(cfg *Config) (*servicerole.Client, error) {
+	if cfg.Functions.FunctionCredentials != contracts.CredentialsRole {
+		return nil, nil
+	}
+	c, err := servicerole.New(servicerole.Config{
+		HTTPClient:      &http.Client{Timeout: identityTimeout},
+		Endpoint:        cfg.Auth.IdentityEndpoint,
+		AccessKeyID:     cfg.Auth.AccessKeyID,
+		SecretAccessKey: cfg.Auth.SecretAccessKey,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to build the execution role client: %w", err)
+	}
+	return c, nil
 }
 
 func registerInfraServices(app *gas.App, cfg *Config, logger gas.Logger) {
@@ -102,15 +151,18 @@ func databaseConfig(store *sqlimpl.Settings) *database.Config {
 	return cfg
 }
 
-func registerAppServices(app *gas.App, cfg *Config) {
+func registerAppServices(app *gas.App, cfg *Config, roles *servicerole.Client) {
+	app.RegisterServiceInstance[*authz.Authorizer](
+		authz.New(cfg.Functions.AccountID, cfg.Functions.Region, time.Now),
+	)
 	app.RegisterSingletonService[contracts.Store](sqlimpl.NewService)
 	app.RegisterSingletonService[*engine.Engine](
-		engine.New(cfg.Functions, cfg.Auth.AccessKeyID, cfg.Auth.SecretAccessKey))
+		engine.New(cfg.Functions, cfg.Auth.AccessKeyID, cfg.Auth.SecretAccessKey, roles))
 }
 
 func registerAppModules(app *gas.App, cfg *Config) {
 	app.RegisterSingletonService[*lambda.Module](lambda.NewModule(cfg.Functions))
-	app.RegisterSingletonService[*history.Module](history.NewModule)
+	app.RegisterSingletonService[*history.Module](history.NewModule(cfg.Functions))
 	app.RegisterSingletonService[*health.Module](health.NewModule)
 }
 

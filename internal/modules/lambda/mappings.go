@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/gasmod/gas"
 
+	"tule.dev/functions/internal/authz"
 	"tule.dev/functions/internal/contracts"
 	"tule.dev/functions/internal/engine"
 	"tule.dev/functions/internal/ids"
@@ -137,18 +139,19 @@ func (m *Module) createMapping(ctx gas.Context) error {
 		return err
 	}
 	arn := *req.EventSourceArn
-	fn, err := m.functionNamed(ctx, *req.FunctionName)
+	if err = checkTags(req.Tags); err != nil {
+		return err
+	}
+	uuid := ids.UUID()
+	fn, err := m.authorizeCreate(ctx, &req, uuid)
 	if err != nil {
 		return err
 	}
 	if err = m.checkUnmapped(ctx, arn, fn); err != nil {
 		return err
 	}
-	if err = checkTags(req.Tags); err != nil {
-		return err
-	}
 	mp := &contracts.Mapping{
-		UUID:           ids.UUID(),
+		UUID:           uuid,
 		EventSourceARN: arn,
 		FunctionName:   fn.Name,
 		FunctionARN:    fn.ARN,
@@ -173,6 +176,87 @@ func (m *Module) createMapping(ctx gas.Context) error {
 	return lambdaapi.Write(ctx, http.StatusAccepted, mappingOf(mp))
 }
 
+// authorizeCreate authorizes the CreateEventSourceMapping req, as the
+// mapping uuid, and returns the function it maps.
+func (m *Module) authorizeCreate(
+	ctx gas.Context,
+	req *lambdaapi.CreateEventSourceMappingRequest,
+	uuid string,
+) (*contracts.Function, error) {
+	name, err := m.resolveName(*req.FunctionName)
+	if err != nil {
+		return nil, err
+	}
+	if err = m.authorize(ctx, m.createMappingRequests(name, uuid, req.Tags)); err != nil {
+		return nil, err
+	}
+	return m.getOrNotFound(ctx, name)
+}
+
+// createMappingRequests are what CreateEventSourceMapping of the function
+// name, as the mapping uuid, needs allowed: lambda:CreateEventSourceMapping,
+// which acts on no resource type, with lambda:FunctionArn, and
+// lambda:TagResource on the new mapping when it is created with tags.
+func (m *Module) createMappingRequests(
+	name, uuid string,
+	tags map[string]string,
+) func() ([]authz.Request, error) {
+	return func() ([]authz.Request, error) {
+		set, err := requestTags(tags)
+		if err != nil {
+			return nil, err
+		}
+		k := merge(set, keys{keyFunctionARN: {m.settings.FunctionARN(name)}})
+		reqs := []authz.Request{request("CreateEventSourceMapping", "*", k)}
+		if len(tags) > 0 {
+			reqs = append(reqs, authz.Request{
+				Action:   actionTagResource,
+				Resource: m.settings.MappingARN(uuid),
+				Context:  set,
+			})
+		}
+		return reqs, nil
+	}
+}
+
+// mappingUUIDPattern is the form of a mapping's UUID, as Lambda's ARNs of
+// mappings have it (the TaggableResource pattern of the SDK model).
+var mappingUUIDPattern = regexp.MustCompile(
+	`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// pathMapping reads the UUID path label. One that is not a UUID names no
+// mapping, and is answered as not found before anything is evaluated, so
+// no request evaluates a resource name longer than a mapping's.
+func pathMapping(ctx gas.Context) (string, error) {
+	uuid, err := lambdaapi.PathParam(ctx, "UUID")
+	if err != nil {
+		return "", err
+	}
+	if !mappingUUIDPattern.MatchString(uuid) {
+		return "", lambdaapi.ErrNotFound("The resource you requested does not exist.")
+	}
+	return uuid, nil
+}
+
+// authorizeMapping authorizes op on the mapping uuid. functions are further
+// functions the request points the mapping at, each of which must be
+// allowed as its lambda:FunctionArn too.
+func (m *Module) authorizeMapping(ctx gas.Context, op, uuid string, functions ...string) error {
+	return m.authorize(ctx, func() ([]authz.Request, error) {
+		k, err := m.mappingKeys(ctx, uuid)
+		if err != nil {
+			return nil, err
+		}
+		arn := m.settings.MappingARN(uuid)
+		reqs := []authz.Request{request(op, arn, k)}
+		for _, fn := range functions {
+			reqs = append(reqs, request(op, arn,
+				merge(k, keys{keyFunctionARN: {m.settings.FunctionARN(fn)}})))
+		}
+		return reqs, nil
+	})
+}
+
 // checkCreate checks what CreateEventSourceMapping needs before it looks at
 // the function: an SQS queue ARN, a queues service to poll it at, no
 // StartingPosition, which SQS mappings do not take, and a FunctionName.
@@ -195,15 +279,6 @@ func (m *Module) checkCreate(req *lambdaapi.CreateEventSourceMappingRequest) err
 	return nil
 }
 
-// functionNamed returns the function a FunctionName member names.
-func (m *Module) functionNamed(ctx gas.Context, value string) (*contracts.Function, error) {
-	name, err := m.resolveName(value)
-	if err != nil {
-		return nil, err
-	}
-	return m.getOrNotFound(ctx, name)
-}
-
 // checkUnmapped refuses a second mapping of the queue to the function.
 func (m *Module) checkUnmapped(ctx gas.Context, arn string, fn *contracts.Function) error {
 	existing, err := m.store.ListMappings(ctx,
@@ -221,8 +296,11 @@ func (m *Module) checkUnmapped(ctx gas.Context, arn string, fn *contracts.Functi
 }
 
 func (m *Module) getMapping(ctx gas.Context) error {
-	uuid, err := lambdaapi.PathParam(ctx, "UUID")
+	uuid, err := pathMapping(ctx)
 	if err != nil {
+		return err
+	}
+	if err = m.authorizeMapping(ctx, "GetEventSourceMapping", uuid); err != nil {
 		return err
 	}
 	mp, err := m.store.GetMapping(ctx, uuid)
@@ -246,6 +324,9 @@ func (m *Module) listMappings(ctx gas.Context) error {
 			return err
 		}
 	}
+	if err = m.authorize(ctx, one("ListEventSourceMappings", "*", nil)); err != nil {
+		return err
+	}
 	out, err := m.store.ListMappings(ctx, f, page)
 	if err != nil {
 		return err
@@ -261,7 +342,7 @@ func (m *Module) listMappings(ctx gas.Context) error {
 }
 
 func (m *Module) updateMapping(ctx gas.Context) error {
-	uuid, err := lambdaapi.PathParam(ctx, "UUID")
+	uuid, err := pathMapping(ctx)
 	if err != nil {
 		return err
 	}
@@ -269,11 +350,9 @@ func (m *Module) updateMapping(ctx gas.Context) error {
 	if err != nil {
 		return err
 	}
-	var fn *contracts.Function
-	if req.FunctionName != nil {
-		if fn, err = m.functionNamed(ctx, *req.FunctionName); err != nil {
-			return err
-		}
+	fn, err := m.authorizeUpdate(ctx, uuid, req.FunctionName)
+	if err != nil {
+		return err
 	}
 	s := mappingSettings{
 		scaling: req.ScalingConfig, enabled: req.Enabled, batchSize: req.BatchSize,
@@ -294,9 +373,33 @@ func (m *Module) updateMapping(ctx gas.Context) error {
 	return lambdaapi.Write(ctx, http.StatusAccepted, mappingOf(mp))
 }
 
-func (m *Module) deleteMapping(ctx gas.Context) error {
-	uuid, err := lambdaapi.PathParam(ctx, "UUID")
+// authorizeUpdate authorizes the UpdateEventSourceMapping of the mapping
+// uuid, and returns the function the update points it at, if it names one
+// in functionName.
+func (m *Module) authorizeUpdate(
+	ctx gas.Context,
+	uuid string,
+	functionName *string,
+) (*contracts.Function, error) {
+	if functionName == nil {
+		return nil, m.authorizeMapping(ctx, "UpdateEventSourceMapping", uuid)
+	}
+	name, err := m.resolveName(*functionName)
 	if err != nil {
+		return nil, err
+	}
+	if err = m.authorizeMapping(ctx, "UpdateEventSourceMapping", uuid, name); err != nil {
+		return nil, err
+	}
+	return m.getOrNotFound(ctx, name)
+}
+
+func (m *Module) deleteMapping(ctx gas.Context) error {
+	uuid, err := pathMapping(ctx)
+	if err != nil {
+		return err
+	}
+	if err = m.authorizeMapping(ctx, "DeleteEventSourceMapping", uuid); err != nil {
 		return err
 	}
 	mp, err := m.engine.DeleteMapping(ctx, uuid)

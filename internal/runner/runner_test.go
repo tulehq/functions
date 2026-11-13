@@ -31,7 +31,12 @@ func newRunner(t *testing.T, maxContainers int) *Runner {
 
 // newRunnerWith is newRunner with the credentials the containers get, none
 // when accessKeyID is empty.
-func newRunnerWith(t *testing.T, maxContainers int, accessKeyID, secret string) *Runner {
+func newRunnerWith(
+	t *testing.T,
+	maxContainers int,
+	accessKeyID, secret string,
+	opts ...func(*Config),
+) *Runner {
 	t.Helper()
 	dc, err := docker.New("unix:///var/run/docker.sock")
 	if err != nil {
@@ -51,7 +56,7 @@ func newRunnerWith(t *testing.T, maxContainers int, accessKeyID, secret string) 
 	go func() { _ = srv.Serve(ln) }()
 
 	instance := ids.Hex(8)
-	r := New(context.Background(), Config{
+	cfg := Config{
 		Logger:             &gas.NopLogger{},
 		Docker:             dc,
 		Runtime:            rt,
@@ -65,7 +70,11 @@ func newRunnerWith(t *testing.T, maxContainers int, accessKeyID, secret string) 
 		IdleTimeout:        time.Minute,
 		AccessKeyID:        accessKeyID,
 		SecretAccessKey:    secret,
-	})
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	r := New(context.Background(), cfg)
 	t.Cleanup(func() {
 		ctx := context.Background()
 		if cErr := r.Close(ctx); cErr != nil {
@@ -275,5 +284,69 @@ func TestTheContainersGetNoKeyWhenItIsOff(t *testing.T) {
 		if v != "" {
 			t.Errorf("%s = %q, want unset", k, v)
 		}
+	}
+}
+
+// TestAContainerWithExpiringCredentialsIsNotReused gives each container a
+// role session of its own: one whose session would expire before an
+// invocation's timeout and margin is replaced by a container with a new
+// session, and one with time to spare is reused.
+func TestAContainerWithExpiringCredentialsIsNotReused(t *testing.T) {
+	image := testfn.Image(t)
+	var mu sync.Mutex
+	sessions := 0
+	lifetimes := []time.Duration{30 * time.Second, time.Hour}
+	r := newRunnerWith(t, 1, "", "", func(c *Config) {
+		c.Credentials = func(_ context.Context, spec *Spec) (*Credentials, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			n := sessions
+			sessions++
+			if spec.Role != "arn:aws:iam::000000000000:role/r" {
+				t.Errorf("credentials for role %q", spec.Role)
+			}
+			return &Credentials{
+				Expiration:      time.Now().Add(lifetimes[min(n, len(lifetimes)-1)]),
+				AccessKeyID:     "ASIA" + strconv.Itoa(n),
+				SecretAccessKey: "secret-" + strconv.Itoa(n),
+				SessionToken:    "token-" + strconv.Itoa(n),
+			}, nil
+		}
+	})
+	spec := specFor(image, 5*time.Second)
+	spec.Role = "arn:aws:iam::000000000000:role/r"
+	seen := func() map[string]string {
+		return decodeEcho(t, invoke(t, r, spec,
+			`{"env":["AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AWS_SESSION_TOKEN"]}`)).Env
+	}
+	for i, want := range []string{"0", "1", "1"} {
+		got := seen()
+		if got["AWS_ACCESS_KEY_ID"] != "ASIA"+want || got["AWS_SESSION_TOKEN"] != "token-"+want ||
+			got["AWS_SECRET_ACCESS_KEY"] != "secret-"+want {
+			t.Fatalf("invocation %d saw %v, want session %s", i, got, want)
+		}
+	}
+}
+
+// TestACredentialsFailureFailsTheInvocation checks that a container whose
+// credentials cannot be had is not started, and frees its slot.
+func TestACredentialsFailureFailsTheInvocation(t *testing.T) {
+	image := testfn.Image(t)
+	r := newRunnerWith(t, 1, "", "", func(c *Config) {
+		c.Credentials = func(context.Context, *Spec) (*Credentials, error) {
+			return nil, errors.New("no role")
+		}
+	})
+	spec := specFor(image, 5*time.Second)
+	for range 2 {
+		if _, err := r.Invoke(t.Context(), spec, &Request{
+			RequestID: ids.UUID(),
+			Payload:   []byte(`{}`),
+		}); err == nil || !strings.Contains(err.Error(), "no role") {
+			t.Fatalf("got %v", err)
+		}
+	}
+	if live, _ := r.Live(spec.Function); live != 0 {
+		t.Fatalf("%d containers live", live)
 	}
 }

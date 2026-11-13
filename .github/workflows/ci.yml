@@ -28,27 +28,36 @@ jobs:
         run: make test
 
       # The end-to-end tests run functions in containers on the runner's
-      # Docker daemon, and build and run the identity and queues services
-      # from their source: identity for keys it issued, queues for the event
-      # source mappings to poll. They run against the siblings' released
+      # Docker daemon, and build and run the identity, queues and
+      # object-store services from their source: identity for keys it issued
+      # and the execution roles it assumes, queues for the event source
+      # mappings to poll, and object-store for a function to call with its
+      # role's session. They run against the siblings' released
       # versions, not their main branches; move the pins when they release.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: tulehq/identity
-          ref: v0.1.0
+          ref: v0.3.1
           path: identity
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: tulehq/queues
-          ref: v0.1.0
+          ref: v0.2.0
           path: queues
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tulehq/object-store
+          ref: v0.6.0
+          path: object-store
 
       - name: End-to-end tests
         run: make test-e2e
         env:
           TULE_E2E_IDENTITY_DIR: ${{ github.workspace }}/identity
           TULE_E2E_QUEUES_DIR: ${{ github.workspace }}/queues
+          TULE_E2E_OBJECT_STORE_DIR: ${{ github.workspace }}/object-store
           # Runs the tests that build function images on AWS's base images,
           # which pull from public.ecr.aws; they skip without it, as they do
           # on a developer machine.

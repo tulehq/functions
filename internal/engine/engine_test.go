@@ -86,7 +86,7 @@ func newEngine(t *testing.T, s *contracts.Settings) (*Engine, *sqlimpl.Service) 
 		t.Skip("docker is not available")
 	}
 	store := newStore(t)
-	e := New(s, "AKIDROOT", "root-secret")(store, &gas.NopLogger{}, gas.NewEventBus())
+	e := New(s, "AKIDROOT", "root-secret", nil)(store, &gas.NopLogger{}, gas.NewEventBus())
 	ctx := t.Context()
 	if err := e.Init(ctx); err != nil {
 		t.Fatalf("init: %v", err)

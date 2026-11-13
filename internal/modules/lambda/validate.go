@@ -71,13 +71,29 @@ func checkPackageType(packageType *string) error {
 	}
 }
 
-var rolePattern = regexp.MustCompile(
-	`^arn:(aws[a-zA-Z-]*)?:iam::\d{12}:role/?[a-zA-Z_0-9+=,.@\-_/]+$`,
-)
+// rolePattern is a role ARN of the aws partition, this service's: the
+// model's RoleArn pattern, modelRolePattern, held to the partition and to
+// the role/ that begins an IAM role's resource (the IAM User Guide, IAM
+// identifiers), both of which the model's pattern leaves open.
+var rolePattern = regexp.MustCompile(`^arn:aws:iam::(\d{12}):role/[a-zA-Z_0-9+=,.@\-_/]+$`)
 
-// checkRole holds a role, recorded and never assumed, to the model's
-// pattern.
-func checkRole(role *string, required bool) error {
+// modelRolePattern is the SDK model's RoleArn pattern, which a role that
+// breaks rolePattern is reported against, as Lambda reports one.
+const modelRolePattern = `arn:(aws[a-zA-Z-]*)?:iam::\d{12}:role/?[a-zA-Z_0-9+=,.@\-_/]+`
+
+// maxRoleARN is the longest role ARN taken: the model gives RoleArn no
+// length, and IAM's ARNs are at most 2048 characters (the IAM API
+// Reference, arnType), so no longer one is ever evaluated as the resource
+// of iam:PassRole.
+const maxRoleARN = 2048
+
+// checkRole holds a role to rolePattern and IAM's ARN length, and to the
+// service's own account: Lambda refuses a role of another account with
+// AccessDeniedException, "Cross-account pass role is not allowed.", as
+// iam:PassRole passes a role only within its account. It is checked before
+// anything is evaluated, for every caller, root included, in every
+// credentials mode.
+func (m *Module) checkRole(role *string, required bool) error {
 	if role == nil {
 		if required {
 			return lambdaapi.ErrValidation("1 validation error detected: Value null at 'role' " +
@@ -85,8 +101,15 @@ func checkRole(role *string, required bool) error {
 		}
 		return nil
 	}
-	if !rolePattern.MatchString(*role) {
-		return constraint("role", "satisfy regular expression pattern: "+rolePattern.String())
+	if len(*role) > maxRoleARN {
+		return constraint("role", "have length less than or equal to 2048")
+	}
+	match := rolePattern.FindStringSubmatch(*role)
+	if match == nil {
+		return constraint("role", "satisfy regular expression pattern: "+modelRolePattern)
+	}
+	if match[1] != m.settings.AccountID {
+		return lambdaapi.ErrAccessDenied("Cross-account pass role is not allowed.")
 	}
 	return nil
 }
@@ -157,6 +180,17 @@ func checkEnvironment(vars map[string]string) error {
 
 // maxTags is how many tags a resource may have.
 const maxTags = 50
+
+// checkTagKeys holds UntagResource's keys to a tag key's length, 1 to 128,
+// so no longer one is ever evaluated as an aws:TagKeys value.
+func checkTagKeys(keys []string) error {
+	for _, k := range keys {
+		if n := utf8.RuneCountInString(k); n < 1 || n > 128 {
+			return constraint("tagKeys.member", "have length between 1 and 128")
+		}
+	}
+	return nil
+}
 
 // checkTags holds tags to the model's key and value constraints.
 func checkTags(tags map[string]string) error {

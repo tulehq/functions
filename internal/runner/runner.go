@@ -60,6 +60,12 @@ type Config struct {
 	// credentials.
 	AccessKeyID     string
 	SecretAccessKey string
+	// Credentials, when set, gives each container its own AWS credentials,
+	// in place of AccessKeyID and SecretAccessKey, when it starts: its
+	// function's role session, which expires. An idle container whose
+	// credentials would expire before an invocation could end is removed
+	// rather than reused, so no invocation runs with expired credentials.
+	Credentials func(ctx context.Context, spec *Spec) (*Credentials, error)
 	// ExtraHosts are added to every container's /etc/hosts, in Docker's
 	// host:ip form.
 	ExtraHosts []string
@@ -72,11 +78,27 @@ type Config struct {
 	IdleTimeout time.Duration
 }
 
+// Credentials are a container's temporary AWS credentials.
+type Credentials struct {
+	Expiration      time.Time
+	AccessKeyID     string
+	SecretAccessKey string
+	SessionToken    string
+}
+
+// credentialsMargin is how long before an invocation's end, at its
+// timeout, a container's credentials must still be valid for the container
+// to take it.
+const credentialsMargin = time.Minute
+
 // Spec is what a function's containers run: the function at one revision.
 type Spec struct {
-	Env        map[string]string
-	Function   string
-	ARN        string
+	Env      map[string]string
+	Function string
+	ARN      string
+	// Role is the function's execution role, whose session Credentials
+	// gives the containers.
+	Role       string
 	Revision   string
 	Image      string
 	WorkingDir string
@@ -283,7 +305,7 @@ func (r *Runner) takeLocked(p *pool, spec *Spec) (*container, error) {
 			continue
 		}
 		p.idle = append(p.idle[:i], p.idle[i+1:]...)
-		if c.isExited() {
+		if c.isExited() || c.expiresBy(time.Now().Add(spec.Timeout+credentialsMargin)) {
 			r.removeLocked(c)
 			continue
 		}
