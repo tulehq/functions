@@ -28,9 +28,10 @@ jobs:
         run: make test
 
       # The end-to-end tests run functions in containers on the runner's
-      # Docker daemon, and build and run the identity, queues and
+      # Docker daemon, and build and run the identity, accounts, queues and
       # object-store services from their source: identity for keys it issued
-      # and the execution roles it assumes, queues for the event source
+      # and the execution roles it assumes, accounts for a member account
+      # whose principals call across accounts, queues for the event source
       # mappings to poll, and object-store for a function to call with its
       # role's session. They run against the siblings' released
       # versions, not their main branches; move the pins when they release.
@@ -39,6 +40,12 @@ jobs:
           repository: tulehq/identity
           ref: v0.4.0
           path: identity
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tulehq/accounts
+          ref: v0.3.0
+          path: accounts
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -56,6 +63,7 @@ jobs:
         run: make test-e2e
         env:
           TULE_E2E_IDENTITY_DIR: ${{ github.workspace }}/identity
+          TULE_E2E_ACCOUNTS_DIR: ${{ github.workspace }}/accounts
           TULE_E2E_QUEUES_DIR: ${{ github.workspace }}/queues
           TULE_E2E_OBJECT_STORE_DIR: ${{ github.workspace }}/object-store
           # Runs the tests that build function images on AWS's base images,
