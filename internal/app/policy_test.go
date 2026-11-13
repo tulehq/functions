@@ -383,3 +383,25 @@ func TestAGrantTheFunctionPolicyCannotMakeIsNotHonored(t *testing.T) {
 		t.Fatalf("got %v\nwant %s", err, want)
 	}
 }
+
+// TestAnEmptyConditionIsRefused sends AddPermission's condition members
+// empty: each is refused with ValidationException, and no statement is
+// stored, so none becomes an unconditioned grant.
+func TestAnEmptyConditionIsRefused(t *testing.T) {
+	root, _ := startApp(t)
+	ctx := t.Context()
+	createActiveOrFailed(t, root, "fn")
+	for name, edit := range map[string]func(*lambda.AddPermissionInput){
+		"PrincipalOrgID":   func(in *lambda.AddPermissionInput) { in.PrincipalOrgID = aws.String("") },
+		"SourceAccount":    func(in *lambda.AddPermissionInput) { in.SourceAccount = aws.String("") },
+		"SourceArn":        func(in *lambda.AddPermissionInput) { in.SourceArn = aws.String("") },
+		"EventSourceToken": func(in *lambda.AddPermissionInput) { in.EventSourceToken = aws.String("") },
+	} {
+		in := addPermission("public", "*")
+		edit(in)
+		_, err := root.AddPermission(ctx, in)
+		requireCode(t, name, err, "ValidationException", http.StatusBadRequest)
+	}
+	_, err := root.GetPolicy(ctx, &lambda.GetPolicyInput{FunctionName: aws.String("fn")})
+	requireCode(t, "nothing stored", err, "ResourceNotFoundException", http.StatusNotFound)
+}
