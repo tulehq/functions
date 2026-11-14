@@ -201,7 +201,10 @@ func (m *Module) list(ctx gas.Context) error {
 // The values the status and source filters take.
 var (
 	statuses = []string{contracts.StatusSucceeded, contracts.StatusFailed, contracts.StatusTimedOut}
-	sources  = []string{contracts.SourceInvoke, contracts.SourceAsync, contracts.SourceMapping}
+	sources  = []string{
+		contracts.SourceInvoke, contracts.SourceAsync, contracts.SourceMapping,
+		contracts.SourceService,
+	}
 )
 
 func oneOf(name, v string, allowed []string) error {

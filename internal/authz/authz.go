@@ -84,12 +84,13 @@ func (e *TooLarge) Error() string {
 // most 50 tags (Lambda's tag limit), each a key of 128 characters and a
 // value of 256, a resource as many, and a principal at most 50
 // (keysource.MaxTags), which with the global and the operation's own keys
-// stays inside these.
+// stays inside these. MaxValueLength is exported, for an operation to refuse
+// a longer value with its own message.
 const (
 	maxKeys        = 192
 	maxKeyLength   = 256
 	maxValues      = 50
-	maxValueLength = 1024
+	MaxValueLength = 1024
 )
 
 // ErrNoPrincipal is a request that reached authorization without a verified
@@ -173,6 +174,58 @@ func (a *Authorizer) Authorize(r *http.Request, build func() ([]Request, error))
 	for _, req := range reqs {
 		if err = a.evaluate(&req, global, unknown, caller, policies); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// AuthorizeService returns nil when the resource-based policy of req allows
+// the AWS service principal service req's action on req's resource, a
+// *Denied when it does not, a *TooLarge for condition keys over the caps,
+// and an error wrapping ErrStoredPolicy for a policy that does not parse.
+// r is the request of the Tule service that calls as service.
+//
+// Only the resource-based policy is evaluated: a service principal has no
+// identity policies, and a resource without a policy, or one whose policy
+// names no such service, does not allow it. A Deny in the policy applies.
+// The context is req's keys and four of the keys the IAM User Guide ("AWS
+// global condition context keys") documents as always in the request
+// context: aws:CurrentTime, aws:EpochTime, aws:SecureTransport and
+// aws:RequestedRegion, the service's own region as GlobalKeys gives it.
+// Others it lists, such as aws:ViaAWSService and aws:ResourceAccount, are
+// not supplied, as GlobalKeys does not supply them for Invoke either.
+// aws:PrincipalServiceName and aws:PrincipalIsAWSService come from
+// tule.dev/policy's AuthorizeService. aws:SourceIp is not supplied: the
+// address is that of the Tule service, not of AWS's service, and "certain
+// network-specific authorization context is redacted" on service-to-service
+// calls (the same page, aws:SourceIp).
+func (a *Authorizer) AuthorizeService(r *http.Request, service string, req *Request) error {
+	now := a.now()
+	keys := union(map[string][]string{
+		"aws:RequestedRegion": {a.region},
+		"aws:CurrentTime":     {now.UTC().Format(time.RFC3339)},
+		"aws:EpochTime":       {strconv.FormatInt(now.Unix(), 10)},
+		"aws:SecureTransport": {strconv.FormatBool(r.TLS != nil)},
+	}, req.Context)
+	if err := checkSize(keys); err != nil {
+		return err
+	}
+	var resource *policy.Policy
+	if req.Policy != "" {
+		var err error
+		if resource, err = a.parseResource([]byte(req.Policy)); err != nil {
+			return err
+		}
+	}
+	az := policy.AuthorizeService(policy.ServiceRequest{
+		Action:   req.Action,
+		Resource: req.Resource,
+		Service:  service,
+		Context:  keys,
+	}, resource)
+	if az.Decision != policy.Allow {
+		return &Denied{
+			Principal: service, Action: req.Action, Resource: req.Resource, Why: az.Reason,
 		}
 	}
 	return nil
@@ -310,7 +363,7 @@ func checkSize(keys map[string][]string) error {
 			return &TooLarge{Reason: strconv.Itoa(len(vs)) + " values of " + k}
 		}
 		for _, v := range vs {
-			if len(v) > maxValueLength {
+			if len(v) > MaxValueLength {
 				return &TooLarge{
 					Reason: "a value of " + k + " of " + strconv.Itoa(len(v)) + " bytes",
 				}

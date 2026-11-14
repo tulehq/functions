@@ -17,6 +17,7 @@ import (
 	"tule.dev/functions/internal/contracts"
 	"tule.dev/functions/internal/engine"
 	"tule.dev/functions/internal/lambdaapi"
+	"tule.dev/functions/serviceinvoke"
 )
 
 const moduleName = "tule/modules/lambda"
@@ -117,11 +118,13 @@ func (m *Module) routes() []route {
 	}
 }
 
-// Init registers the routes.
+// Init registers the routes, and the service-invoke endpoint's, which is
+// not a Lambda operation.
 func (m *Module) Init(context.Context) error {
 	for _, r := range m.routes() {
 		m.router.Handle(m, r.method, r.path, serve(r.h))
 	}
+	m.router.Handle(m, http.MethodPost, serviceinvoke.Path, m.serviceInvoke)
 	return nil
 }
 

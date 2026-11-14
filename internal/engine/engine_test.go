@@ -136,7 +136,7 @@ func invoke(t *testing.T, e *Engine, name, payload string) *runner.Result {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := e.Invoke(t.Context(), fn, ids.UUID(), "", []byte(payload))
+	res, err := e.Invoke(t.Context(), fn, contracts.SourceInvoke, ids.UUID(), "", []byte(payload))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestAnAsyncInvocationThatCannotRunIsRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requestID := e.InvokeAsync(fn, []byte(`{}`))
+	requestID := e.InvokeAsync(fn, contracts.SourceAsync, []byte(`{}`))
 	time.Sleep(1500 * time.Millisecond) // a couple of retries
 	if _, err = store.GetInvocation(t.Context(), requestID); !errors.Is(err,
 		contracts.ErrInvocationNotFound) {
@@ -255,7 +255,7 @@ func TestAFunctionErrorIsRetriedAndEachAttemptRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requestID := e.InvokeAsync(fn, []byte(`{"action":"error"}`))
+	requestID := e.InvokeAsync(fn, contracts.SourceAsync, []byte(`{"action":"error"}`))
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		inv, gErr := store.GetInvocation(t.Context(), requestID)

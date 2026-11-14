@@ -65,12 +65,14 @@ func (m *Module) invoke(ctx gas.Context) error {
 	case invokeDryRun:
 		return lambdaapi.NoContent(ctx)
 	case invokeAsync:
-		w.Header().Set(lambdaapi.RequestIDHeader, m.engine.InvokeAsync(fn, payload))
+		w.Header().
+			Set(lambdaapi.RequestIDHeader, m.engine.InvokeAsync(fn, contracts.SourceAsync, payload))
 		w.WriteHeader(http.StatusAccepted)
 		return nil
 	}
 	requestID := ids.UUID()
-	res, err := m.engine.Invoke(ctx, fn, requestID, clientContext, payload)
+	res, err := m.engine.Invoke(ctx, fn, contracts.SourceInvoke, requestID, clientContext,
+		payload)
 	if err != nil {
 		return err
 	}

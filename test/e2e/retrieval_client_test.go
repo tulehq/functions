@@ -177,7 +177,7 @@ func requireInvocationShape(t *testing.T, it invocation) {
 		t.Fatalf("invocation %s has status %q", it.RequestID, it.Status)
 	}
 	switch it.Source {
-	case "invoke", "async", "eventSourceMapping":
+	case "invoke", "async", "eventSourceMapping", "service":
 	default:
 		t.Fatalf("invocation %s has source %q", it.RequestID, it.Source)
 	}
