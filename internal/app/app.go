@@ -15,7 +15,6 @@ import (
 	"github.com/gasmod/gas/migrate"
 	"tule.dev/identity/principals"
 	"tule.dev/identity/servicerole"
-	"tule.dev/sigv4"
 
 	"tule.dev/functions/internal/authz"
 	"tule.dev/functions/internal/contracts"
@@ -191,7 +190,7 @@ func registerAppModules(app *gas.App, cfg *Config, bound lambda.Principals) {
 	app.RegisterSingletonService[*health.Module](health.NewModule)
 }
 
-func installMiddleware(r *gas.Router, cfg *Config, logger gas.Logger, verifier *sigv4.Verifier) {
+func installMiddleware(r *gas.Router, cfg *Config, logger gas.Logger, verifier *verifiers) {
 	r.UseMiddlewareFunc(nil, httpx.RequestID(cfg.Env))
 
 	// No X-Forwarded-For handling: nothing is expected in front of this

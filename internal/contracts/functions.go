@@ -113,11 +113,13 @@ type Mapping struct {
 }
 
 // The sources and statuses of an invocation, as the retrieval API names
-// them.
+// them. SourceService is an invocation through the service-invoke
+// endpoint, of either type.
 const (
 	SourceInvoke  = "invoke"
 	SourceAsync   = "async"
 	SourceMapping = "eventSourceMapping"
+	SourceService = "service"
 
 	StatusSucceeded = "succeeded"
 	StatusFailed    = "failed"

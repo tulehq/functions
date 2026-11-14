@@ -51,12 +51,12 @@ func specOf(fn *contracts.Function) *runner.Spec {
 	}
 }
 
-// Invoke runs a synchronous invocation of fn and records it. At the
-// function's cap it fails with TooManyRequestsException.
+// Invoke runs a synchronous invocation of fn and records it under source.
+// At the function's cap it fails with TooManyRequestsException.
 func (e *Engine) Invoke(
 	ctx context.Context,
 	fn *contracts.Function,
-	requestID, clientContext string,
+	source, requestID, clientContext string,
 	payload []byte,
 ) (*runner.Result, error) {
 	res, err := e.runner.Invoke(ctx, specOf(fn), &runner.Request{
@@ -72,19 +72,19 @@ func (e *Engine) Invoke(
 	if err != nil {
 		return nil, err
 	}
-	e.record(ctx, fn.Name, contracts.SourceInvoke, payload, res, 1)
+	e.record(ctx, fn.Name, source, payload, res, 1)
 	return res, nil
 }
 
-// InvokeAsync queues an asynchronous invocation of fn and returns its
-// request ID. It runs in the background, waiting for a container when the
-// function is at its cap, and when it fails it runs again after
-// AsyncRetryDelay, then after twice that.
-func (e *Engine) InvokeAsync(fn *contracts.Function, payload []byte) string {
+// InvokeAsync queues an asynchronous invocation of fn, recorded under
+// source, and returns its request ID. It runs in the background, waiting
+// for a container when the function is at its cap, and when it fails it
+// runs again after AsyncRetryDelay, then after twice that.
+func (e *Engine) InvokeAsync(fn *contracts.Function, source string, payload []byte) string {
 	requestID := ids.UUID()
 	name := fn.Name
 	e.goBackground(func(ctx context.Context) {
-		e.runAsync(ctx, name, requestID, payload)
+		e.runAsync(ctx, name, source, requestID, payload)
 	})
 	return requestID
 }
@@ -104,7 +104,7 @@ const (
 // AsyncRetryDelay and twice that, each attempt recorded; any other failure
 // is retried with backoff until the function is gone or the event is too
 // old, and then recorded as failed. Only a shutdown drops it unrecorded.
-func (e *Engine) runAsync(ctx context.Context, name, requestID string, payload []byte) {
+func (e *Engine) runAsync(ctx context.Context, name, source, requestID string, payload []byte) {
 	queued := time.Now()
 	backoff := systemRetryFirst
 	for attempt := 1; ; {
@@ -113,14 +113,14 @@ func (e *Engine) runAsync(ctx context.Context, name, requestID string, payload [
 			return
 		}
 		if err != nil {
-			if !e.retrySystemError(ctx, name, requestID, payload, err, attempt-1,
+			if !e.retrySystemError(ctx, name, source, requestID, payload, err, attempt-1,
 				time.Since(queued)+backoff, backoff) {
 				return
 			}
 			backoff = min(2*backoff, systemRetryMax)
 			continue
 		}
-		e.record(ctx, name, contracts.SourceAsync, payload, res, attempt)
+		e.record(ctx, name, source, payload, res, attempt)
 		if res.Status == runner.StatusSucceeded || attempt == asyncAttempts {
 			return
 		}
@@ -137,14 +137,14 @@ func (e *Engine) runAsync(ctx context.Context, name, requestID string, payload [
 // recorded as failed instead.
 func (e *Engine) retrySystemError(
 	ctx context.Context,
-	name, requestID string,
+	name, source, requestID string,
 	payload []byte,
 	err error,
 	attempts int,
 	ageThen, backoff time.Duration,
 ) bool {
 	if gone(err) || ageThen > maxEventAge {
-		e.recordFailure(ctx, name, requestID, payload, err, attempts)
+		e.recordFailure(ctx, name, source, requestID, payload, err, attempts)
 		return false
 	}
 	e.logger.Warn("an asynchronous invocation will be retried").Str("function", name).
@@ -174,10 +174,10 @@ func gone(err error) bool {
 }
 
 // recordFailure records an asynchronous invocation that could not be run,
-// as failed, with the error that stopped it.
+// as failed under source, with the error that stopped it.
 func (e *Engine) recordFailure(
 	ctx context.Context,
-	function, requestID string,
+	function, source, requestID string,
 	payload []byte,
 	cause error,
 	attempts int,
@@ -193,7 +193,7 @@ func (e *Engine) recordFailure(
 	doc, _ := json.Marshal(map[string]string{"errorType": errType, "errorMessage": msg})
 	e.put(ctx, &contracts.Invocation{
 		Time: time.Now().UTC(), RequestID: requestID, Function: function,
-		Source: contracts.SourceAsync, Status: contracts.StatusFailed,
+		Source: source, Status: contracts.StatusFailed,
 		ErrorType: errType, ErrorMessage: msg, Payload: payload, Result: doc,
 		Attempts: attempts,
 	})

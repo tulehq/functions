@@ -180,7 +180,7 @@ func TestTheContextIsCapped(t *testing.T) {
 	p := user(allow("*", "*"))
 	cases := map[string]map[string][]string{
 		"values": {"aws:TagKeys": make([]string, maxValues+1)},
-		"length": {"aws:RequestTag/k": {strings.Repeat("x", maxValueLength+1)}},
+		"length": {"aws:RequestTag/k": {strings.Repeat("x", MaxValueLength+1)}},
 		"keys":   manyKeys(maxKeys + 1),
 		"key":    {"aws:RequestTag/" + strings.Repeat("k", maxKeyLength): {"v"}},
 	}
@@ -681,5 +681,50 @@ func TestOrganizationConditionsAreDecided(t *testing.T) {
 				t.Fatalf("allow %t, got %v", tt.allow, err)
 			}
 		})
+	}
+}
+
+// TestAServiceIsAllowedByTheResourcePolicyAlone checks AuthorizeService: a
+// statement naming the service allows it, with its conditions on the keys
+// the request supplies, a Deny wins, and no policy or another service's
+// statement does not allow it.
+func TestAServiceIsAllowedByTheResourcePolicyAlone(t *testing.T) {
+	const sm = "secretsmanager.amazonaws.com"
+	allow := `{"Effect":"Allow","Principal":{"Service":"` + sm + `"},` +
+		`"Action":"lambda:InvokeFunction","Resource":"` + fnARN + `",` +
+		`"Condition":{"StringEquals":{"aws:SourceAccount":"123456789012",` +
+		`"aws:RequestedRegion":"us-east-1"}}}`
+	deny := `{"Effect":"Deny","Principal":{"Service":"` + sm + `"},` +
+		`"Action":"lambda:InvokeFunction","Resource":"` + fnARN + `",` +
+		`"Condition":{"ArnLike":{"aws:SourceArn":"arn:aws:secretsmanager:*:*:secret:blocked-*"}}}`
+	doc := `{"Version":"2012-10-17","Statement":[` + allow + `,` + deny + `]}`
+	a := New("123456789012", "us-east-1", func() time.Time { return now })
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	req := func(service, account, source, doc string) error {
+		k := map[string][]string{"aws:SourceAccount": {account}}
+		if source != "" {
+			k["aws:SourceArn"] = []string{source}
+		}
+		return a.AuthorizeService(r, service, &Request{
+			Action: "lambda:InvokeFunction", Resource: fnARN, Policy: doc, Context: k,
+		})
+	}
+	const secret = "arn:aws:secretsmanager:us-east-1:123456789012:secret:"
+	if err := req(sm, "123456789012", secret+"db", doc); err != nil {
+		t.Fatalf("allowed: %v", err)
+	}
+	var denied *Denied
+	for what, err := range map[string]error{
+		"another account": req(sm, "111111111111", secret+"db", doc),
+		"the Deny":        req(sm, "123456789012", secret+"blocked-db", doc),
+		"another service": req("sns.amazonaws.com", "123456789012", secret+"db", doc),
+		"no policy":       req(sm, "123456789012", secret+"db", ""),
+	} {
+		if !errors.As(err, &denied) || denied.Principal == "" {
+			t.Errorf("%s: got %v, want a *Denied", what, err)
+		}
+	}
+	if err := req(sm, "123456789012", "", "not a policy"); !errors.Is(err, ErrStoredPolicy) {
+		t.Errorf("a stored policy that does not parse: got %v", err)
 	}
 }

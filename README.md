@@ -828,7 +828,7 @@ history between tests. They are signed like every other request, for the
 
 | Route | Answer |
 |---|---|
-| `GET /_functions/invocations` | `200` with `{"items": [invocation, ...], "nextCursor": "..."}`, newest first. `function`, `status` (`succeeded`, `failed`, `timedOut`), `source` (`invoke`, `async`, `eventSourceMapping`), `since` and `until` (RFC 3339, inclusive) filter it; `limit` is 1 to 100, 20 by default; `cursor` takes the `nextCursor` of the page before, which the last page leaves out |
+| `GET /_functions/invocations` | `200` with `{"items": [invocation, ...], "nextCursor": "..."}`, newest first. `function`, `status` (`succeeded`, `failed`, `timedOut`), `source` (`invoke`, `async`, `eventSourceMapping`, `service`), `since` and `until` (RFC 3339, inclusive) filter it; `limit` is 1 to 100, 20 by default; `cursor` takes the `nextCursor` of the page before, which the last page leaves out |
 | `GET /_functions/invocations/{requestId}` | `200` with the invocation, its `payload`, its `result` and its whole `log` |
 | `DELETE /_functions/invocations` | `204`: empties the history |
 
@@ -856,7 +856,9 @@ An invocation is:
 a success. `payload` and `result` are the bytes as text, and only the item
 read back by its request ID carries them and the log. An asynchronous
 invocation is one item, its last attempt, with `attempts` counting them; a
-mapping's batch is one item of its own request ID.
+mapping's batch is one item of its own request ID. An invocation through
+the [service invoke endpoint](#the-service-invoke-endpoint), of either
+type, has the source `service`.
 
 An error is `{"code", "message"}` with the code in `X-Amzn-ErrorType`: `404`
 `ResourceNotFoundException` for an unknown request ID, `400`
@@ -871,6 +873,147 @@ curl -fsS --aws-sigv4 aws:amz:us-east-1:lambda --user test:test \
 curl -fsS --aws-sigv4 aws:amz:us-east-1:lambda --user test:test \
   -X DELETE http://localhost:9060/_functions/invocations
 ```
+
+## The service invoke endpoint
+
+An internal endpoint, not an AWS API, through which a Tule service invokes
+a function as an AWS service principal, as Secrets Manager invokes a
+rotation function as `secretsmanager.amazonaws.com`. AWS services invoke
+functions this way, and the function policy must allow the service
+`lambda:InvokeFunction`: the Secrets Manager User Guide ("Set up automatic
+rotation using the AWS CLI") adds that permission with `aws lambda
+add-permission --action lambda:InvokeFunction --principal
+secretsmanager.amazonaws.com --source-account <account>`. `Invoke`
+evaluates the caller's identity, and no caller is a service, so a Tule
+service invokes such a function through this endpoint instead. It is
+`POST /_internal/invoke`, modeled on identity's assume-role endpoint.
+
+- **Authentication.** SigV4 for the signing name `lambda`, with the root
+  key: the configured `TULE_Auth_AccessKeyID`, or, with identity, a key
+  identity issued the root user of the service's account
+  (`TULE_Functions_AccountID`), the principals that are never evaluated
+  against policies ([Permissions](#permissions)). Any other key, an IAM
+  user's or a role session's whatever its policies allow, is refused as
+  unknown. A refusal is `403` with the sigv4 Kind as the code, such as
+  `MissingAuth`, `UnknownAccessKey`, `SignatureMismatch` or
+  `WrongService`, as identity's internal endpoints refuse one, before the
+  endpoint parses the body. A missing or malformed signature, the wrong
+  service, and an unknown key are refused before the body is read; the
+  verifier reads the body, up to 7 MiB, to hash it before it compares the
+  signature, so `SignatureMismatch` comes after. A key lookup identity
+  fails is `500` `InternalFailure`, and a body over 7 MiB is `413`
+  `RequestTooLarge`. As
+  on every other route, a request signed for any region verifies; the
+  client signs for the service's.
+- **Request.**
+
+  ```json
+  {"FunctionName": "rotate", "ServicePrincipal": "secretsmanager.amazonaws.com",
+   "SourceArn": "arn:aws:secretsmanager:us-east-1:000000000000:secret:db-AbCdEf",
+   "SourceAccount": "000000000000", "InvocationType": "RequestResponse",
+   "Payload": {"Step": "createSecret"}}
+  ```
+
+  `FunctionName` is a name, a name with a qualifier, or an ARN, resolved as
+  `Invoke` resolves it. `ServicePrincipal` is a service principal, DNS
+  labels ending in `.amazonaws.com`, checked as identity's assume-role
+  endpoint checks it. `SourceArn`, an ARN, and `SourceAccount`, 12 digits,
+  are optional: the resource the service acts for and its account, such as
+  a secret's. `InvocationType` is `RequestResponse`, the default, or
+  `Event`. `Payload` is the event, any JSON value, `{}` when left out,
+  within `Invoke`'s limits: 6 MB for `RequestResponse`, 1 MB for `Event`,
+  measured on the bytes received. The function gets those bytes as they
+  are, as `Invoke` passes its payload on. `SourceArn` is held to 1024
+  characters, the longest condition value the service evaluates, though an
+  ARN may be 2048.
+- **Evaluation.** Only the function policy is evaluated, with
+  tule.dev/policy's `AuthorizeService`, as a service principal has no
+  identity policies. It must allow the service principal
+  `lambda:InvokeFunction` on the function, with the resource rules of
+  `Invoke`: a request that names `:$LATEST` is evaluated on the qualified
+  ARN ([Write `Resource` to cover `:$LATEST`](#function-policies)). A
+  `Deny` that applies refuses it, and a function without a policy, or
+  whose policy names no such service, is refused. A `Service` value
+  matches only the service principal it names exactly. `Principal` `"*"`
+  names a service too, in an `Allow` and a `Deny` alike, and `NotPrincipal`
+  `"*"` exempts one (tule.dev/policy's `AuthorizeService`), as AWS
+  documents it: the SNS Developer Guide gives a queue policy of
+  `"Principal": "*"` with an `ArnEquals` `aws:SourceArn` condition as "an
+  example policy statement that allows the Amazon SNS topic to send a
+  message to the Amazon SQS queue"
+  ([Sending Amazon SNS messages to an Amazon SQS queue in a different account](https://docs.aws.amazon.com/sns/latest/dg/sns-send-message-to-sqs-cross-account.html)).
+  So an `Allow` of `"*"` should carry an `aws:SourceArn` or
+  `aws:SourceAccount` condition, or it lets every service invoke the
+  function. The context is what the
+  IAM User Guide's global condition context keys page documents for a
+  call by a service principal: `aws:SourceArn` and `aws:SourceAccount`
+  from the request when given, which "the calling service passes", so a
+  policy can guard against the confused deputy problem;
+  `aws:PrincipalServiceName` and `aws:PrincipalIsAWSService`, which
+  tule.dev/policy sets; `aws:CurrentTime`, `aws:EpochTime`,
+  `aws:SecureTransport` and `aws:RequestedRegion` (the service's own
+  region), four of the keys the page says are always present; and the
+  function's `aws:ResourceTag/<key>`, as `Invoke` supplies them. Others
+  the page lists as present, such as `aws:ViaAWSService` and
+  `aws:ResourceAccount`, are not supplied, as `Invoke` does not supply
+  them either. `aws:SourceIp` is not
+  supplied: the address is the Tule service's, and the page says
+  network-specific context is redacted on service-to-service calls.
+  `aws:SourceOrgID` and `aws:SourceOrgPaths` are not supplied either: the
+  request carries no organization for the source.
+- **Execution.** Exactly as an `Invoke` of the same type: the same
+  runner, timeout, state checks and, for `Event`, retries. The history
+  records it with the source `service` ([Retrieval API](#retrieval-api)).
+- **Response.** `X-Amzn-RequestId` is the invocation's request ID, as
+  `Invoke` answers it, under which the [retrieval API](#retrieval-api)
+  keeps it (`GET /_functions/invocations/{requestId}`). `200` for
+  `RequestResponse`, with the function's result, or its error document
+  when it failed, as the `Payload`, the bytes the function sent:
+
+  ```json
+  {"StatusCode": 200, "ExecutedVersion": "$LATEST", "FunctionError": "Unhandled",
+   "Payload": {"errorMessage": "...", "errorType": "..."}}
+  ```
+
+  `FunctionError` is left out when the function succeeded, and `Payload`
+  when it returned nothing, as `Invoke` answers an empty `200`. `202`
+  `{"StatusCode": 202}` for `Event`, once it is queued.
+- **Refusals.** `{"Code": "...", "Message": "..."}`, the shape of
+  identity's internal endpoints' errors: `404` `ResourceNotFound` (no such
+  function, or an ARN of another account or region), `403` `AccessDenied`
+  (the function policy does not allow the service), `409`
+  `ResourceConflict` (the function is pending, failed, or updating without
+  an image it can run, as `Invoke` refuses it), `400` `InvalidRequest` (a
+  body that is not a request, or a malformed field), `413`
+  `RequestTooLarge` (a payload over the limit), `429` `TooManyRequests`
+  (the function at its container cap, as `Invoke` answers), and `502`
+  `InvalidFunctionResponse` when the function ran and its result is not
+  JSON, so it cannot be the `Payload`; that invocation is in the history.
+  A failure of the store is `500` `InternalFailure`.
+
+### The service invoke client
+
+`tule.dev/functions/serviceinvoke` is the endpoint's client:
+
+```go
+c, err := serviceinvoke.New(serviceinvoke.Config{
+	Endpoint:        "http://localhost:9060",
+	Region:          "us-east-1",
+	AccessKeyID:     rootKeyID,
+	SecretAccessKey: rootSecret,
+})
+res, err := c.Invoke(ctx, "rotate", "secretsmanager.amazonaws.com", event,
+	serviceinvoke.WithSourceArn(secretARN),
+	serviceinvoke.WithSourceAccount(accountID))
+```
+
+`WithEvent()` makes the invocation `Event`. `res` carries `RequestID`,
+`StatusCode`, `ExecutedVersion`, `FunctionError` and `Payload`. The
+payload is sent, and the result returned, byte for byte; a payload that
+is not JSON is an error before anything is sent. It returns
+`serviceinvoke.ErrNotFound`, `ErrAccessDenied` and `ErrConflict` for those
+refusals, and a `*serviceinvoke.Error` or a transport error otherwise. A
+function that fails is no error: its result has `FunctionError` set.
 
 ## Differences from AWS
 
