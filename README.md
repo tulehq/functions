@@ -1038,8 +1038,10 @@ function that fails is no error: its result has `FunctionError` set.
   such keys fails with `500` `ServiceException` rather than be evaluated.
   Lambda documents no answer for these requests; these are the service's.
 - **Some condition keys are not supplied.** `aws:SourceArn` and
-  `aws:SourceAccount` are not supplied, since no AWS service calls a function here, so a statement
-  conditioned on them never applies. Nor are `lambda:Layer`,
+  `aws:SourceAccount` are supplied only on the
+  [service invoke endpoint](#the-service-invoke-endpoint), from its
+  request; no caller of the Lambda API is an AWS service, so there a
+  statement conditioned on them never applies. Nor are `lambda:Layer`,
   `lambda:VpcIds`, `lambda:SubnetIds`, `lambda:SecurityGroupIds` and
   `lambda:CodeSigningConfigArn`, for features the service does not have,
   and `lambda:EventSourceToken` and `lambda:InvokedViaFunctionUrl`, since
@@ -1056,9 +1058,12 @@ function that fails is no error: its result has `FunctionError` set.
   statement `AddPermission` adds is bound, and the policy's other
   statements are not. A session whose role was deleted is denied either
   way.
-- **Service principals never match.** No AWS service calls a function
-  here, so a `Service` principal, such as one `AddPermission` writes for
-  `sns.amazonaws.com`, matches no caller.
+- **Service principals match only on the service invoke endpoint.** A
+  `Service` principal, such as one `AddPermission` writes for
+  `secretsmanager.amazonaws.com`, matches the invocations a Tule service
+  makes as that service through the
+  [service invoke endpoint](#the-service-invoke-endpoint). No caller of the
+  Lambda API is an AWS service, so there it matches no caller.
 - **Public function policies are not blocked.** Lambda refuses a policy
   that would grant public access with `PublicPolicyException` under its
   public access settings, which are not served; here such a policy is
