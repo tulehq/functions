@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"tule.dev/functions/serviceinvoke"
@@ -267,6 +268,65 @@ func TestServiceInvokeFunctionError(t *testing.T) {
 	}
 	requireNoErr(t, json.Unmarshal(res.Payload, &doc), "decode the error document")
 	requireEqual(t, doc.ErrorMessage, "handled failure: no", "error message")
+}
+
+// TestServiceInvokeDryRun checks a DryRun, Invoke's "Validate parameter
+// values and verify that the user or role has permission to invoke the
+// function", answered "204" (Invoke): it is held to the function policy and
+// the function's state, as a RequestResponse is, and runs nothing.
+func TestServiceInvokeDryRun(t *testing.T) {
+	c, srv := newClient(t)
+	createFunction(t, c, "rotate", "echo", nil)
+	grantRotation(t, c)
+	sc := rootServiceClient(t, srv)
+	ctx := t.Context()
+	dryRun := append(asSecret(), serviceinvoke.WithDryRun())
+
+	res, err := sc.Invoke(ctx, "rotate", secretsManager, []byte(`{"Step":"createSecret"}`),
+		dryRun...)
+	requireNoErr(t, err, "a DryRun the policy allows")
+	requireEqual(t, res.StatusCode, http.StatusNoContent, "status code")
+	requireEqual(t, len(res.Payload), 0, "payload of a DryRun")
+	if res.RequestID == "" {
+		t.Fatal("a DryRun has no request ID")
+	}
+
+	_, err = sc.Invoke(ctx, "rotate", "sns.amazonaws.com", nil, dryRun...)
+	requireIs(t, err, serviceinvoke.ErrAccessDenied, "a DryRun as another service")
+	_, err = sc.Invoke(ctx, "rotate", secretsManager, nil, serviceinvoke.WithDryRun())
+	requireIs(t, err, serviceinvoke.ErrAccessDenied,
+		"a DryRun without SourceArn or SourceAccount")
+	_, err = sc.Invoke(ctx, "missing", secretsManager, nil, dryRun...)
+	requireIs(t, err, serviceinvoke.ErrNotFound, "a DryRun of a missing function")
+
+	// A function that is not Active is refused, as Invoke refuses a DryRun
+	// of it. The image names a registry on a closed local port, so the
+	// function fails.
+	in := createInput("broken", "echo")
+	in.Code.ImageUri = aws.String("127.0.0.1:1/tule-functions-e2e/missing:" + runID)
+	_, err = c.CreateFunction(ctx, in)
+	requireNoErr(t, err, "create function with a missing image")
+	err = lambda.NewFunctionActiveV2Waiter(c, func(o *lambda.FunctionActiveV2WaiterOptions) {
+		o.MinDelay, o.MaxDelay = 100*time.Millisecond, time.Second
+	}).Wait(ctx, &lambda.GetFunctionInput{FunctionName: aws.String("broken")}, waitTimeout)
+	if err == nil {
+		t.Fatal("FunctionActiveV2 succeeded for a function whose image is missing")
+	}
+	requireEqual(t, getConfig(t, c, "broken").State, types.StateFailed, "State")
+	_, err = c.AddPermission(ctx, &lambda.AddPermissionInput{
+		FunctionName: aws.String("broken"), StatementId: aws.String("secretsmanager"),
+		Action: aws.String("lambda:InvokeFunction"), Principal: aws.String(secretsManager),
+	})
+	requireNoErr(t, err, "grant the service on broken")
+	_, err = sc.Invoke(ctx, "broken", secretsManager, nil, serviceinvoke.WithDryRun())
+	requireIs(t, err, serviceinvoke.ErrConflict, "a DryRun of a Failed function")
+	err = errOf(c.Invoke(ctx, &lambda.InvokeInput{
+		FunctionName: aws.String("broken"), InvocationType: types.InvocationTypeDryRun,
+	}))
+	requireModeled[*types.ResourceConflictException](t, err)
+
+	// Nothing ran.
+	requireEqual(t, len(historyFor(srv).all(t, nil)), 0, "invocations after the DryRuns")
 }
 
 func TestServiceInvokeRefusesAnotherKey(t *testing.T) {
