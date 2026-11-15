@@ -1211,6 +1211,13 @@ principals call in. CI checks out `tulehq/identity` v0.5.0,
 `tulehq/accounts` v0.4.0, `tulehq/queues` v0.3.0 and `tulehq/object-store`
 v0.7.0 and sets them.
 
+## Upgrading from v0.6
+
+- **The `server started` log line carries the bound address.** It is
+  written once the Lambda API's port is bound, with the bound address, such
+  as `[::]:9060`, where it gave the configured `0.0.0.0:9060`, and a `tls`
+  field. A server that cannot bind its port fails without writing it.
+
 ## Upgrading from v0.5
 
 - **The service invoke endpoint takes `DryRun`.** An `InvocationType` of

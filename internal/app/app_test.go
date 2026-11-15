@@ -329,7 +329,8 @@ func TestStoppingWithAnInvocationInFlightIsClean(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { _ = a.Server().Serve(ln) }()
+	served := make(chan error, 1)
+	go func() { served <- a.ServeListener(ln) }()
 	httpClient := &http.Client{Timeout: time.Minute}
 	c := lambda.New(lambda.Options{
 		Region: "us-east-1", BaseEndpoint: aws.String("http://" + ln.Addr().String()),
@@ -362,6 +363,9 @@ func TestStoppingWithAnInvocationInFlightIsClean(t *testing.T) {
 	}
 	if err = <-stopped; err != nil {
 		t.Fatalf("stop = %v, want a clean stop", err)
+	}
+	if err = <-served; err != nil {
+		t.Fatalf("serve = %v, want nil after the stop", err)
 	}
 	if took := time.Since(start); took > 3*time.Second {
 		t.Fatalf("the stop took %v", took)
