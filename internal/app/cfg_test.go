@@ -82,6 +82,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 		{f.PidsLimit, 1024, "pids limit"},
 		{f.HistoryMaxBytes, 256 << 20, "history bytes"},
 		{f.RuntimeAPIBind, "", "runtime API bind"},
+		{f.ContainerNetwork, "", "container network"},
 		{cfg.store.Get("Server.Port"), 9060, "server port"},
 	}
 	for _, tt := range limits {
@@ -218,5 +219,36 @@ func TestStaticCredentialsWithIdentityAreWarnedAbout(t *testing.T) {
 			tt.warned && !strings.Contains(msg, "lambda:UpdateFunctionCode") {
 			t.Errorf("%q %s: %q", tt.identity, tt.mode, msg)
 		}
+	}
+}
+
+func TestLoadConfigChecksTheContainerNetwork(t *testing.T) {
+	for _, tt := range []struct {
+		name, network, host, bind string
+		ok                        bool
+	}{
+		{"unset", "", "host.docker.internal", "", true},
+		{"service name and bind", "tule", "functions", "0.0.0.0", true},
+		{"host.docker.internal", "tule", "host.docker.internal", "", true},
+		{"service name without bind", "tule", "functions", "", false},
+		{"none", "none", "host.docker.internal", "", false},
+		{"bridge", "bridge", "functions", "0.0.0.0", false},
+		{"default", "default", "functions", "0.0.0.0", false},
+		{"host", "host", "functions", "0.0.0.0", false},
+		{"container", "container:abc", "functions", "0.0.0.0", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TULE_Functions_ContainerNetwork", tt.network)
+			t.Setenv("TULE_Functions_RuntimeAPIHost", tt.host)
+			t.Setenv("TULE_Functions_RuntimeAPIBind", tt.bind)
+			cfg, err := loadEnvConfig(t, "AKID", "secret")
+			if (err == nil) != tt.ok {
+				t.Fatalf("load config = %v, want ok %v", err, tt.ok)
+			}
+			if err == nil && cfg.Functions.ContainerNetwork != tt.network {
+				t.Fatalf("container network = %q, want %q",
+					cfg.Functions.ContainerNetwork, tt.network)
+			}
+		})
 	}
 }

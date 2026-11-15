@@ -1,8 +1,8 @@
 // Package docker is the small part of the Docker Engine API the functions
 // service uses, spoken with net/http over the daemon's socket: inspecting
 // and pulling images, and creating, attaching to, starting, pausing,
-// waiting on, listing and removing containers, and finding the address the
-// containers reach the host at.
+// waiting on, listing and removing containers, inspecting networks, and
+// finding the address the containers reach the host at.
 //
 // Every call but the ping names the API version, APIVersion, the oldest
 // with every field used here; Ping refuses a daemon older than that.
@@ -28,8 +28,8 @@ import (
 // 20.10.
 const APIVersion = "1.41"
 
-// ErrNotFound is returned for an image or a container the daemon does not
-// have.
+// ErrNotFound is returned for an image, a container or a network the
+// daemon does not have.
 var ErrNotFound = errors.New("docker: not found")
 
 // Client talks to one Docker daemon.
@@ -258,9 +258,12 @@ func (c *Client) PullImage(ctx context.Context, ref *Reference) error {
 // ContainerSpec is what a container is created with. MemoryBytes is both
 // its memory and its memory-and-swap limit, so it gets no swap; PidsLimit
 // bounds its processes; LogMaxSize bounds what Docker keeps of its output.
+// Network, when set, is the network the container is attached to in place
+// of the default bridge.
 type ContainerSpec struct {
 	Labels      map[string]string
 	Name        string
+	Network     string
 	Image       string
 	WorkingDir  string
 	LogMaxSize  string
@@ -287,11 +290,15 @@ type createBody struct {
 }
 
 type hostConfig struct {
-	LogConfig  logConfig `json:"LogConfig"`
-	ExtraHosts []string  `json:"ExtraHosts,omitempty"`
-	Memory     int64     `json:"Memory,omitempty"`
-	MemorySwap int64     `json:"MemorySwap,omitempty"`
-	PidsLimit  int64     `json:"PidsLimit,omitempty"`
+	LogConfig logConfig `json:"LogConfig"`
+	// NetworkMode names the network the container is created on: a value
+	// other than bridge, host, none or container:<id> is taken as a custom
+	// network's name. Omitted, it is the default bridge.
+	NetworkMode string   `json:"NetworkMode,omitempty"`
+	ExtraHosts  []string `json:"ExtraHosts,omitempty"`
+	Memory      int64    `json:"Memory,omitempty"`
+	MemorySwap  int64    `json:"MemorySwap,omitempty"`
+	PidsLimit   int64    `json:"PidsLimit,omitempty"`
 }
 
 type logConfig struct {
@@ -312,10 +319,11 @@ func (c *Client) CreateContainer(ctx context.Context, spec *ContainerSpec) (stri
 		Entrypoint: spec.Entrypoint,
 		Cmd:        spec.Cmd,
 		HostConfig: hostConfig{
-			ExtraHosts: spec.ExtraHosts,
-			Memory:     spec.MemoryBytes,
-			MemorySwap: spec.MemoryBytes,
-			PidsLimit:  spec.PidsLimit,
+			NetworkMode: spec.Network,
+			ExtraHosts:  spec.ExtraHosts,
+			Memory:      spec.MemoryBytes,
+			MemorySwap:  spec.MemoryBytes,
+			PidsLimit:   spec.PidsLimit,
 			LogConfig: logConfig{
 				Type: "local",
 				Config: map[string]string{
@@ -464,6 +472,12 @@ func (c *Client) ListContainers(ctx context.Context, key, value string) ([]strin
 		idList = append(idList, c.ID)
 	}
 	return idList, nil
+}
+
+// InspectNetwork checks the daemon has the network name, an ID or a name,
+// or returns ErrNotFound.
+func (c *Client) InspectNetwork(ctx context.Context, name string) error {
+	return c.doJSON(ctx, http.MethodGet, "/networks/"+escapePath(name), nil, nil, nil)
 }
 
 // HostAddress returns the address on the Docker host that the containers

@@ -108,6 +108,7 @@ func (r *Runner) containerSpec(c *container, creds *Credentials) *docker.Contain
 		Cmd:         spec.Command,
 		WorkingDir:  spec.WorkingDir,
 		Env:         r.environment(spec, c.token, creds),
+		Network:     r.cfg.Network,
 		ExtraHosts:  r.cfg.ExtraHosts,
 		MemoryBytes: int64(spec.MemorySize) << 20,
 		PidsLimit:   r.cfg.PidsLimit,

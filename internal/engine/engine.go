@@ -85,8 +85,9 @@ func (e *Engine) Name() string {
 	return "tule/services/functions/engine"
 }
 
-// Init connects to Docker and opens the Runtime API listener. The rest
-// waits for Start, once the store's schema is applied.
+// Init connects to Docker, checks it has the container network, when one
+// is set, and opens the Runtime API listener. The rest waits for Start,
+// once the store's schema is applied.
 func (e *Engine) Init(ctx context.Context) error {
 	dc, err := docker.New(e.settings.DockerHost)
 	if err != nil {
@@ -96,6 +97,9 @@ func (e *Engine) Init(ctx context.Context) error {
 		return fmt.Errorf("engine: Docker at %s does not answer: %w", e.settings.DockerHost, err)
 	}
 	e.docker = dc
+	if err = e.checkNetwork(ctx); err != nil {
+		return err
+	}
 	bind := e.settings.RuntimeAPIBind
 	if bind == "" {
 		if bind, err = dc.HostAddress(ctx); err != nil {
@@ -126,6 +130,23 @@ func (e *Engine) Init(ctx context.Context) error {
 		}
 	}()
 	e.ctx, e.cancel = context.WithCancel(context.WithoutCancel(ctx))
+	return nil
+}
+
+// checkNetwork checks Docker has the container network, when one is set.
+func (e *Engine) checkNetwork(ctx context.Context) error {
+	network := e.settings.ContainerNetwork
+	if network == "" {
+		return nil
+	}
+	err := e.docker.InspectNetwork(ctx, network)
+	if errors.Is(err, docker.ErrNotFound) {
+		return fmt.Errorf("engine: TULE_Functions_ContainerNetwork names the network %q, "+
+			"which Docker at %s does not have: %w", network, e.settings.DockerHost, err)
+	}
+	if err != nil {
+		return fmt.Errorf("engine: inspect the network %q: %w", network, err)
+	}
 	return nil
 }
 
@@ -160,6 +181,7 @@ func (e *Engine) Start(ctx context.Context) error {
 			e.settings.RuntimeAPIHost,
 			strconv.Itoa(e.RuntimeAPIPort()),
 		),
+		Network:            e.settings.ContainerNetwork,
 		ExtraHosts:         e.extraHosts(),
 		InstanceID:         instance,
 		Region:             e.settings.Region,
