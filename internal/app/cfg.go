@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gasmod/gas"
@@ -138,7 +139,8 @@ var (
 
 // checkFunctions holds the account to 12 digits, the region to an AWS
 // region's shape, the queues endpoint to an http or https URL, and the
-// limits, the Runtime API's address and the credentials to theirs.
+// limits, the Runtime API's address, the container network and the
+// credentials to theirs.
 func checkFunctions(f *contracts.Settings, identityEndpoint string) error {
 	if !accountIDPattern.MatchString(f.AccountID) {
 		return fmt.Errorf("config: Functions.AccountID %q is not 12 digits", f.AccountID)
@@ -153,6 +155,9 @@ func checkFunctions(f *contracts.Settings, identityEndpoint string) error {
 		return err
 	}
 	if err := checkBind(f.RuntimeAPIBind); err != nil {
+		return err
+	}
+	if err := checkNetwork(f); err != nil {
 		return err
 	}
 	return checkCredentials(f, identityEndpoint)
@@ -184,6 +189,31 @@ func checkLimits(f *contracts.Settings) error {
 func checkBind(bind string) error {
 	if bind != "" && net.ParseIP(bind) == nil {
 		return fmt.Errorf("config: Functions.RuntimeAPIBind %q is not an IP address", bind)
+	}
+	return nil
+}
+
+// checkNetwork holds the container network, when set, to a user-defined
+// network, the only kind whose DNS resolves the service by name: Docker's
+// none, bridge, default and host, and container:<id>, are refused. So is a
+// network with RuntimeAPIBind unset while RuntimeAPIHost is not
+// host.docker.internal: unset, the Runtime API listens on the Docker host's
+// address for host.docker.internal, which a host that names the service on
+// the network, such as functions, does not resolve to.
+func checkNetwork(f *contracts.Settings) error {
+	n := f.ContainerNetwork
+	switch {
+	case n == "":
+		return nil
+	case n == "none" || n == "bridge" || n == "default" || n == "host" ||
+		strings.HasPrefix(n, "container:"):
+		return fmt.Errorf("config: Functions.ContainerNetwork %q is not a user-defined "+
+			"network; it needs one, such as the service's own compose network, whose DNS "+
+			"resolves the service's name", n)
+	case f.RuntimeAPIHost != "host.docker.internal" && f.RuntimeAPIBind == "":
+		return fmt.Errorf("config: Functions.ContainerNetwork %q with Functions.RuntimeAPIHost "+
+			"%q needs Functions.RuntimeAPIBind, such as 0.0.0.0, so the Runtime API listens "+
+			"where the containers reach it on the network", f.ContainerNetwork, f.RuntimeAPIHost)
 	}
 	return nil
 }
@@ -264,6 +294,8 @@ func applyDefaults(store gas.ConfigProvider) error {
 	// the containers are given a host-gateway mapping for on Linux.
 	setDefault("Functions.RuntimeAPIHost", "host.docker.internal")
 	setDefault("Functions.RuntimeAPIPort", 9061)
+	// Unset, the containers are on Docker's default bridge network.
+	setDefault("Functions.ContainerNetwork", "")
 	// Unset, event source mappings cannot be created.
 	setDefault("Functions.QueuesEndpoint", "")
 	// The account and region ARNs carry: the other services' defaults, so

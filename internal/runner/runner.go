@@ -66,6 +66,9 @@ type Config struct {
 	// credentials would expire before an invocation could end is removed
 	// rather than reused, so no invocation runs with expired credentials.
 	Credentials func(ctx context.Context, spec *Spec) (*Credentials, error)
+	// Network, when set, is the Docker network every container is attached
+	// to, in place of the default bridge.
+	Network string
 	// ExtraHosts are added to every container's /etc/hosts, in Docker's
 	// host:ip form.
 	ExtraHosts []string

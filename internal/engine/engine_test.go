@@ -7,6 +7,7 @@ import (
 	"net"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -309,5 +310,23 @@ func TestAMappingDeletedWhileItStartsLeavesNoPoller(t *testing.T) {
 		case err != nil:
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestAMissingContainerNetworkFailsInit(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker is not available")
+	}
+	s := settings()
+	s.ContainerNetwork = "tule-functions-test-missing-" + ids.Hex(4)
+	e := New(s, "AKIDROOT", "root-secret", nil)(newStore(t), &gas.NopLogger{}, gas.NewEventBus())
+	err := e.Init(t.Context())
+	if err == nil {
+		_ = e.Close(context.Background())
+		t.Fatal("init succeeded on a network Docker does not have")
+	}
+	if !errors.Is(err, docker.ErrNotFound) ||
+		!strings.Contains(err.Error(), "TULE_Functions_ContainerNetwork") {
+		t.Fatalf("init = %v, want the missing network named", err)
 	}
 }

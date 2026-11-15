@@ -350,3 +350,13 @@ func TestACredentialsFailureFailsTheInvocation(t *testing.T) {
 		t.Fatalf("%d containers live", live)
 	}
 }
+
+func TestAContainerIsCreatedOnTheConfiguredNetwork(t *testing.T) {
+	for _, network := range []string{"", "tule"} {
+		r := &Runner{cfg: Config{Network: network, RuntimeAddr: "functions:9061"}}
+		c := newContainer(specFor("app", time.Second), nil)
+		if got := r.containerSpec(c, nil).Network; got != network {
+			t.Errorf("network = %q, want %q", got, network)
+		}
+	}
+}

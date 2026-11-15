@@ -6,10 +6,10 @@ import (
 )
 
 // Settings configure how functions run: the Docker daemon, the Runtime API
-// listener and the address the containers reach it at, the queues service
-// the event source mappings poll, the account and region the ARNs carry,
-// and the limits of the containers, the asynchronous retries and the
-// history.
+// listener and the address the containers reach it at, the network the
+// containers are attached to, the queues service the event source mappings
+// poll, the account and region the ARNs carry, and the limits of the
+// containers, the asynchronous retries and the history.
 type Settings struct {
 	FunctionAccessKeyID     string
 	FunctionSecretAccessKey string
@@ -25,8 +25,11 @@ type Settings struct {
 	FunctionCredentials string `validate:"required"`
 	// RuntimeAPIBind is the address the Runtime API listens on; empty, the
 	// address on the Docker host the containers reach it at.
-	RuntimeAPIBind     string
-	RuntimeAPIHost     string `validate:"required"`
+	RuntimeAPIBind string
+	RuntimeAPIHost string `validate:"required"`
+	// ContainerNetwork is the Docker network the containers are attached
+	// to; empty, the default bridge.
+	ContainerNetwork   string
 	HistoryLimit       int
 	AsyncRetryDelay    time.Duration
 	MaxContainers      int

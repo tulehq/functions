@@ -1,7 +1,9 @@
 package docker
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -178,5 +180,70 @@ func TestParseReferenceFollowsDockersGrammar(t *testing.T) {
 		if err != nil || ref.String() != want {
 			t.Errorf("ParseReference(%q) = %v, %v; want %s", s, ref, err, want)
 		}
+	}
+}
+
+func TestACreateNamesTheNetworkOnlyWhenOneIsSet(t *testing.T) {
+	var bodies [][]byte
+	c, _ := newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, b)
+		_, _ = w.Write([]byte(`{"Id":"abc"}`))
+	})
+	for _, network := range []string{"", "tule"} {
+		_, err := c.CreateContainer(t.Context(), &ContainerSpec{
+			Name: "fn", Image: "app", Network: network, LogMaxSize: "1m",
+			ExtraHosts: []string{"host.docker.internal:host-gateway"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if hc := hostConfigOf(t, bodies[0]); hc["NetworkMode"] != nil {
+		t.Errorf("create without a network sent NetworkMode %s", hc["NetworkMode"])
+	}
+	hc := hostConfigOf(t, bodies[1])
+	if string(hc["NetworkMode"]) != `"tule"` {
+		t.Errorf("create on tule sent NetworkMode %s", hc["NetworkMode"])
+	}
+	if hc["ExtraHosts"] == nil {
+		t.Error("create on tule dropped the extra hosts")
+	}
+}
+
+// hostConfigOf returns the HostConfig fields of a create request's body.
+func hostConfigOf(t *testing.T, body []byte) map[string]json.RawMessage {
+	t.Helper()
+	var b struct {
+		HostConfig map[string]json.RawMessage `json:"HostConfig"`
+	}
+	if err := json.Unmarshal(body, &b); err != nil {
+		t.Fatal(err)
+	}
+	return b.HostConfig
+}
+
+func TestInspectNetworkReportsAMissingOne(t *testing.T) {
+	found := true
+	c, f := newFake(t, func(w http.ResponseWriter, _ *http.Request) {
+		if !found {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message":"network tule not found"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"Name":"tule","Id":"0123"}`))
+	})
+	if err := c.InspectNetwork(t.Context(), "tule"); err != nil {
+		t.Fatalf("inspect = %v", err)
+	}
+	found = false
+	if err := c.InspectNetwork(t.Context(), "tule"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("inspect a missing network = %v, want ErrNotFound", err)
+	}
+	if got := f.paths(); got[0] != "/v1.41/networks/tule" {
+		t.Fatalf("request = %s", got[0])
 	}
 }
