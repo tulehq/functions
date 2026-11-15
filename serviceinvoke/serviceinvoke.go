@@ -41,6 +41,7 @@ const SigningName = "lambda"
 const (
 	InvocationRequestResponse = "RequestResponse"
 	InvocationEvent           = "Event"
+	InvocationDryRun          = "DryRun"
 )
 
 // Request is the body of a call. FunctionName is a function's name, a name
@@ -51,8 +52,8 @@ const (
 // its account, and are supplied to the function policy as aws:SourceArn
 // and aws:SourceAccount, as AWS services supply them against the confused
 // deputy problem (the IAM User Guide, the confused deputy problem).
-// InvocationType is RequestResponse, the default when empty, or Event.
-// Payload is the event, any JSON value; left out, it is {}.
+// InvocationType is RequestResponse, the default when empty, Event, or
+// DryRun. Payload is the event, any JSON value; left out, it is {}.
 type Request struct {
 	FunctionName     string          `json:"FunctionName"`
 	ServicePrincipal string          `json:"ServicePrincipal"`
@@ -65,7 +66,8 @@ type Request struct {
 // Response is the body of a successful call: StatusCode 200 with the
 // function's result for a RequestResponse invocation, FunctionError
 // Unhandled and the error document as Payload when the function failed;
-// StatusCode 202 alone for an Event invocation, queued.
+// StatusCode 202 alone for an Event invocation, queued. A DryRun is
+// answered 204 with no body.
 type Response struct {
 	ExecutedVersion string          `json:"ExecutedVersion,omitempty"`
 	FunctionError   string          `json:"FunctionError,omitempty"`
@@ -130,7 +132,9 @@ func (e *Error) Error() string {
 // invocation, StatusCode is 200, ExecutedVersion $LATEST, and Payload the
 // function's result, or its error document when FunctionError is set, nil
 // when the function returned nothing. For an Event invocation, StatusCode
-// is 202 and Payload is nil.
+// is 202 and Payload is nil. For a DryRun, StatusCode is 204 and RequestID
+// is the call's own: nothing ran, so the retrieval API keeps nothing under
+// it.
 type Result struct {
 	RequestID       string
 	ExecutedVersion string
@@ -163,6 +167,12 @@ func WithSourceAccount(account string) Option {
 // rather than waiting for its result.
 func WithEvent() Option {
 	return func(r *Request) { r.InvocationType = InvocationEvent }
+}
+
+// WithDryRun only checks that the service may invoke the function and that
+// the function can be invoked, as a DryRun Invoke does, without running it.
+func WithDryRun() Option {
+	return func(r *Request) { r.InvocationType = InvocationDryRun }
 }
 
 // Config configures a Client.
@@ -257,6 +267,9 @@ func (c *Client) Invoke(
 	status, header, raw, err := c.post(ctx, body)
 	if err != nil {
 		return nil, fmt.Errorf("serviceinvoke: %w", err)
+	}
+	if status == http.StatusNoContent && len(raw) == 0 {
+		return &Result{RequestID: header.Get(RequestIDHeader), StatusCode: status}, nil
 	}
 	if status != http.StatusOK && status != http.StatusAccepted {
 		return nil, decodeError(status, raw)

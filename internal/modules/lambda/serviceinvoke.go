@@ -50,7 +50,9 @@ func invalidService(msg string) *refusal {
 // same type runs it, when the function policy allows the service principal
 // lambda:InvokeFunction on the function, qualified as Invoke evaluates it.
 // Only the function policy is evaluated, as a service principal has no
-// identity policies. The invocation is recorded with source service.
+// identity policies. The invocation is recorded with source service. A
+// DryRun is answered 204 once the function policy and the function's state
+// allow it, as Invoke answers one: nothing runs and nothing is recorded.
 func (m *Module) serviceInvoke(ctx gas.Context) error {
 	var req serviceinvoke.Request
 	if err := json.NewDecoder(ctx.Request().Body).Decode(&req); err != nil {
@@ -67,6 +69,9 @@ func (m *Module) serviceInvoke(ctx gas.Context) error {
 	fn, err := m.serviceInvocable(ctx, &req, name)
 	if err != nil {
 		return writeServiceFailure(ctx, err)
+	}
+	if req.InvocationType == serviceinvoke.InvocationDryRun {
+		return lambdaapi.NoContent(ctx)
 	}
 	// The payload is the bytes received, as Invoke passes them on.
 	payload := []byte(req.Payload)
@@ -142,18 +147,19 @@ func checkServiceRequest(req *serviceinvoke.Request) *refusal {
 }
 
 // checkPayload checks the invocation type, setting RequestResponse when it
-// is empty, and holds the payload to Invoke's limit for the type.
+// is empty, and holds the payload to Invoke's limit for the type, a
+// DryRun's to RequestResponse's, as Invoke holds it.
 func checkPayload(req *serviceinvoke.Request) *refusal {
 	limit := MaxSyncPayload
 	switch req.InvocationType {
 	case "":
 		req.InvocationType = serviceinvoke.InvocationRequestResponse
-	case serviceinvoke.InvocationRequestResponse:
+	case serviceinvoke.InvocationRequestResponse, serviceinvoke.InvocationDryRun:
 	case serviceinvoke.InvocationEvent:
 		limit = MaxAsyncPayload
 	default:
 		return invalidService("InvocationType " + strconv.Quote(req.InvocationType) +
-			" is not RequestResponse or Event.")
+			" is not RequestResponse, Event or DryRun.")
 	}
 	if len(req.Payload) > limit {
 		return &refusal{

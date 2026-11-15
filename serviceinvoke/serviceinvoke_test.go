@@ -293,3 +293,26 @@ func TestAnEventPayloadIsMeasuredAsSent(t *testing.T) {
 		t.Fatalf("a RequestResponse invocation's request ID: %+v, %v", res, err)
 	}
 }
+
+// TestADryRunIsAnsweredWithNoContent checks, against a local listener, that
+// WithDryRun sends a DryRun and that its answer, 204 with no body, is a
+// Result with the status and the request ID.
+func TestADryRunIsAnsweredWithNoContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req serviceinvoke.Request
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
+			req.InvocationType != serviceinvoke.InvocationDryRun {
+			t.Errorf("the endpoint got the invocation type %q, %v; want DryRun",
+				req.InvocationType, err)
+		}
+		w.Header().Set(serviceinvoke.RequestIDHeader, "req-1")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	res, err := client(t, srv.URL).Invoke(t.Context(), "fn", secretsManager, nil,
+		serviceinvoke.WithDryRun())
+	if err != nil || res.StatusCode != http.StatusNoContent || res.RequestID != "req-1" ||
+		res.Payload != nil || res.ExecutedVersion != "" || res.FunctionError != "" {
+		t.Fatalf("result = %+v, %v", res, err)
+	}
+}

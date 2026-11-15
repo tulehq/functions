@@ -919,10 +919,13 @@ service invokes such a function through this endpoint instead. It is
   labels ending in `.amazonaws.com`, checked as identity's assume-role
   endpoint checks it. `SourceArn`, an ARN, and `SourceAccount`, 12 digits,
   are optional: the resource the service acts for and its account, such as
-  a secret's. `InvocationType` is `RequestResponse`, the default, or
-  `Event`. `Payload` is the event, any JSON value, `{}` when left out,
-  within `Invoke`'s limits: 6 MB for `RequestResponse`, 1 MB for `Event`,
-  measured on the bytes received. The function gets those bytes as they
+  a secret's. `InvocationType` is `RequestResponse`, the default, `Event`,
+  or `DryRun`, which, as `Invoke`'s does, only checks that the service may
+  invoke the function: "Validate parameter values and verify that the user
+  or role has permission to invoke the function" (the Lambda API
+  Reference, Invoke). `Payload` is the event, any JSON value, `{}` when
+  left out, within `Invoke`'s limits: 6 MB for `RequestResponse` and
+  `DryRun`, 1 MB for `Event`, measured on the bytes received. The function gets those bytes as they
   are, as `Invoke` passes its payload on. `SourceArn` is held to 1024
   characters, the longest condition value the service evaluates, though an
   ARN may be 2048.
@@ -964,6 +967,8 @@ service invokes such a function through this endpoint instead. It is
 - **Execution.** Exactly as an `Invoke` of the same type: the same
   runner, timeout, state checks and, for `Event`, retries. The history
   records it with the source `service` ([Retrieval API](#retrieval-api)).
+  A `DryRun` is evaluated and held to the state checks as the others are,
+  and then runs nothing and is not recorded.
 - **Response.** `X-Amzn-RequestId` is the invocation's request ID, as
   `Invoke` answers it, under which the [retrieval API](#retrieval-api)
   keeps it (`GET /_functions/invocations/{requestId}`). `200` for
@@ -977,7 +982,10 @@ service invokes such a function through this endpoint instead. It is
 
   `FunctionError` is left out when the function succeeded, and `Payload`
   when it returned nothing, as `Invoke` answers an empty `200`. `202`
-  `{"StatusCode": 202}` for `Event`, once it is queued.
+  `{"StatusCode": 202}` for `Event`, once it is queued. `204` with no body
+  for `DryRun`, as `Invoke` answers one ("For the `DryRun` invocation
+  type, the status code is 204"); its `X-Amzn-RequestId` is the call's
+  own, as nothing ran, and the retrieval API keeps nothing under it.
 - **Refusals.** `{"Code": "...", "Message": "..."}`, the shape of
   identity's internal endpoints' errors: `404` `ResourceNotFound` (no such
   function, or an ARN of another account or region), `403` `AccessDenied`
@@ -989,7 +997,9 @@ service invokes such a function through this endpoint instead. It is
   (the function at its container cap, as `Invoke` answers), and `502`
   `InvalidFunctionResponse` when the function ran and its result is not
   JSON, so it cannot be the `Payload`; that invocation is in the history.
-  A failure of the store is `500` `InternalFailure`.
+  A failure of the store is `500` `InternalFailure`. A `DryRun` is refused
+  with the same `400`, `403`, `404`, `409` and `413` as the others, and
+  never with `429` or `502`, as it runs nothing.
 
 ### The service invoke client
 
@@ -1007,8 +1017,10 @@ res, err := c.Invoke(ctx, "rotate", "secretsmanager.amazonaws.com", event,
 	serviceinvoke.WithSourceAccount(accountID))
 ```
 
-`WithEvent()` makes the invocation `Event`. `res` carries `RequestID`,
-`StatusCode`, `ExecutedVersion`, `FunctionError` and `Payload`. The
+`WithEvent()` makes the invocation `Event`, and `WithDryRun()` makes it
+`DryRun`, whose `res` has `StatusCode` `204` and its `RequestID` alone.
+`res` carries `RequestID`, `StatusCode`, `ExecutedVersion`,
+`FunctionError` and `Payload`. The
 payload is sent, and the result returned, byte for byte; a payload that
 is not JSON is an error before anything is sent. It returns
 `serviceinvoke.ErrNotFound`, `ErrAccessDenied` and `ErrConflict` for those
@@ -1198,6 +1210,15 @@ policies, and the cross-account tests a real accounts service, at
 principals call in. CI checks out `tulehq/identity` v0.5.0,
 `tulehq/accounts` v0.4.0, `tulehq/queues` v0.3.0 and `tulehq/object-store`
 v0.7.0 and sets them.
+
+## Upgrading from v0.5
+
+- **The service invoke endpoint takes `DryRun`.** An `InvocationType` of
+  `DryRun`, which v0.5 refused with `400` `InvalidRequest`, is now
+  evaluated against the function policy and the function's state and
+  answered `204`, with nothing run or recorded
+  ([The service invoke endpoint](#the-service-invoke-endpoint)); the
+  client sends one with `serviceinvoke.WithDryRun()`.
 
 ## Upgrading from v0.3
 
