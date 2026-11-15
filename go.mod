@@ -14,11 +14,11 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.52.0
 	github.com/aws/smithy-go v1.28.9
 	github.com/distribution/reference v0.6.0
-	github.com/gasmod/gas v0.9.0
-	github.com/gasmod/gas/config v0.9.0
-	github.com/gasmod/gas/database v0.9.0
-	github.com/gasmod/gas/log v0.9.0
-	github.com/gasmod/gas/migrate v0.9.0
+	github.com/gasmod/gas v0.10.0
+	github.com/gasmod/gas/config v0.10.0
+	github.com/gasmod/gas/database v0.10.0
+	github.com/gasmod/gas/log v0.10.0
+	github.com/gasmod/gas/migrate v0.10.0
 	github.com/go-chi/chi/v5 v5.5.1-0.20261018135022-9f8adb1aabaa
 	github.com/rs/zerolog v1.35.1
 	modernc.org/sqlite v1.62.0
