@@ -27,6 +27,7 @@ With Docker, mounting the daemon's socket:
 docker run --rm -p 9060:9060 -p 9061:9061 -v functionsdata:/data \
   -v /var/run/docker.sock:/var/run/docker.sock \
   --group-add "$(stat -c %g /var/run/docker.sock)" \
+  --security-opt label=disable \
   -e TULE_Auth_AccessKeyID=test -e TULE_Auth_SecretAccessKey=test \
   ghcr.io/tulehq/functions:latest
 ```
@@ -37,6 +38,11 @@ which reaches the socket through the socket's group:
 - **Linux:** `--group-add "$(stat -c %g /var/run/docker.sock)"`, the group
   that owns the socket on the host, as above. The smoke test runs the image
   this way.
+- **SELinux hosts (Fedora, RHEL):** the socket's label keeps a container
+  from opening it, whatever its groups. `--security-opt label=disable`
+  (`security_opt: ["label=disable"]` in compose) turns labeling off for
+  this container alone; hosts without SELinux ignore it. Checked on
+  Fedora 45 with SELinux enforcing.
 - **Docker Desktop (macOS, Windows), unverified:** the socket a container
   sees is the one inside Docker Desktop's VM, and its group there is not the
   one `stat` reports on the Mac for `/var/run/docker.sock`. Mount it with
@@ -100,6 +106,7 @@ services:
     # The group that owns the socket on the Docker host, such as
     # DOCKER_GID=$(stat -c %g /var/run/docker.sock).
     group_add: ["${DOCKER_GID}"]
+    security_opt: ["label=disable"]
 
 volumes:
   queuesdata:
@@ -154,6 +161,7 @@ services:
       - functionsdata:/data
       - /var/run/docker.sock:/var/run/docker.sock
     group_add: ["${DOCKER_GID}"]
+    security_opt: ["label=disable"]
 
 networks:
   tule:
